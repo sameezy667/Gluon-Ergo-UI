@@ -71,6 +71,7 @@ export function FeeBreakdownPanel({
       return;
     }
 
+    let cancelled = false;
     setLoading(true);
 
     const timer = setTimeout(async () => {
@@ -92,6 +93,8 @@ export function FeeBreakdownPanel({
             .catch(() => 0),
         ]);
 
+        if (cancelled) return;
+
         const [fees, outputRaw] = await Promise.all([
           direction === "toNeutron"
             ? gluon.getTotalFeeAmountTransmuteToNeutron(gluonBox, oracleBox, amountNano)
@@ -100,6 +103,8 @@ export function FeeBreakdownPanel({
             ? gluon.transmuteToNeutronWillGet(gluonBox, oracleBox, amountNano, currentHeight)
             : gluon.transmuteToProtonWillGet(gluonBox, oracleBox, amountNano, currentHeight),
         ]);
+
+        if (cancelled) return;
 
         const feeNano: number =
           typeof fees === "object" && fees !== null && "totalFee" in fees
@@ -115,24 +120,30 @@ export function FeeBreakdownPanel({
           currentReserveRatio - (feeERG / amountERG) * currentReserveRatio * 0.01
         );
 
-        setData({
-          feeAmountERG: feeERG,
-          feeAmountUSD: feeERG * ergPriceUSD,
-          netOutput,
-          priceImpact,
-          newReserveRatio,
-        });
+        if (!cancelled) {
+          setData({
+            feeAmountERG: feeERG,
+            feeAmountUSD: feeERG * ergPriceUSD,
+            netOutput,
+            priceImpact,
+            newReserveRatio,
+          });
+        }
       } catch (err) {
-        console.error("[FeeBreakdownPanel]", err);
-        setData(null);
+        if (!cancelled) {
+          console.error("[FeeBreakdownPanel]", err);
+          setData(null);
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     }, 400);
 
     return () => {
+      cancelled = true;
       clearTimeout(timer);
-      setLoading(false);
     };
   }, [amountERG, direction, ergPriceUSD, currentReserveRatio]);
 

@@ -23,7 +23,8 @@ import {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const HISTORY_KEY = "gluon_reserve_history";
-const MAX_ENTRIES = 720; // 30 days @ 1/hr
+// 30 days × 24 h × 60 min at a 60-second polling interval
+const MAX_ENTRIES = 43_200;
 const POLL_INTERVAL_MS = 60_000;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -342,9 +343,9 @@ export function ReserveRatioChart() {
                   position: "insideTopRight",
                 }}
               />
-              {/* Risk threshold */}
+              {/* Risk threshold — matches getStatus(): Risk when ratio < 150 */}
               <ReferenceLine
-                y={100}
+                y={150}
                 stroke="#ef444466"
                 strokeDasharray="4 4"
                 label={{

@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect, useMemo } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Tooltip as RechartsTooltip, ReferenceLine, Legend } from "recharts";
+import type { TooltipProps } from "recharts";
+import type { Payload as LegendPayload } from "recharts/types/component/DefaultLegendContent";
 import { format as dateFnsFormat } from "date-fns";
 
 type TimeRange = "7D" | "30D";
@@ -17,20 +19,20 @@ interface YieldPoint {
   apr: number;
 }
 
-const CustomTooltip = ({ active, payload, label }: any) => {
+const CustomTooltip = ({ active, payload, label }: TooltipProps<number, string>) => {
   if (active && payload && payload.length) {
-    const apy = payload.find((p: any) => p.dataKey === "apy");
-    const apr = payload.find((p: any) => p.dataKey === "apr");
-    const dateStr = dateFnsFormat(new Date(label), 'MMM d, yyyy HH:mm');
+    const apy = payload.find((p) => p.dataKey === "apy");
+    const apr = payload.find((p) => p.dataKey === "apr");
+    const dateStr = dateFnsFormat(new Date(label as number), 'MMM d, yyyy HH:mm');
     return (
       <div className="rounded-lg border border-gray-200 dark:border-white/10 bg-white dark:bg-[#1e1e1e] px-3 py-2 text-xs shadow-none">
         <p className="mb-1 text-gray-400 dark:text-white/40">{dateStr}</p>
-        {apy && (
+        {apy && typeof apy.value === 'number' && (
           <p className="text-sm font-semibold text-emerald-500">
             APY: {apy.value.toFixed(2)}%
           </p>
         )}
-        {apr && (
+        {apr && typeof apr.value === 'number' && (
           <p className="text-sm font-semibold text-emerald-400">
             APR: {apr.value.toFixed(2)}%
           </p>
@@ -41,10 +43,15 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   return null;
 };
 
-const CustomLegend = ({ payload }: any) => {
+interface CustomLegendProps {
+  payload?: LegendPayload[];
+}
+
+const CustomLegend = ({ payload }: CustomLegendProps) => {
+  if (!payload?.length) return null;
   return (
     <div className="flex justify-center gap-4 pt-2">
-      {payload.map((entry: any, index: number) => (
+      {payload.map((entry, index) => (
         <div key={`item-${index}`} className="flex items-center gap-1.5">
           <span
             className="w-2 h-2 rounded-full"
@@ -83,9 +90,11 @@ export function GaucYieldChart() {
   useEffect(() => {
     if (history.length < 2) return;
 
+    const now = Date.now();
     const windowDays = range === '7D' ? 7 : 30;
-    const cutoff = Date.now() - windowDays * 24 * 60 * 60 * 1000;
-    const validHistory = history.filter(e => e.timestamp >= cutoff && e.timestamp >= Date.now() - 3 * 24 * 60 * 60 * 1000);
+    const cutoff = now - windowDays * 24 * 60 * 60 * 1000;
+    // Use only the range-selected window — no extra hard limit.
+    const validHistory = history.filter(e => e.timestamp >= cutoff);
 
     const points: YieldPoint[] = [];
     for (const point of validHistory) {
@@ -95,14 +104,14 @@ export function GaucYieldChart() {
       const newest = windowEntries[windowEntries.length - 1];
       const days = (newest.timestamp - oldest.timestamp) / 86400000;
       if (days < 0.021) continue;
-      
+
       const apy = newest.ratio > oldest.ratio
         ? (Math.pow(newest.ratio / oldest.ratio, 365 / days) - 1) * 100
         : 0;
       const apr = newest.ratio > oldest.ratio
         ? ((newest.ratio / oldest.ratio) - 1) * (365 / days) * 100
         : 0;
-      
+
       if (!isNaN(apy) && !isNaN(apr) && isFinite(apy) && isFinite(apr) && !(Math.abs(apy) > 200 || Math.abs(apr) > 1000)) {
         points.push({ timestamp: point.timestamp, apy, apr });
       }
