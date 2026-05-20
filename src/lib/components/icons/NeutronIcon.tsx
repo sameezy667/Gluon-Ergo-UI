@@ -1,17 +1,18 @@
 import React from "react";
+import { tokenConfig } from "@/config/tokenConfig";
 
 interface NeutronIconProps {
   className?: string;
 }
 
-// Neutron Icon - Base asset colored token
+// Stable asset icon (internal reference: neutron)
 const NeutronIcon: React.FC<NeutronIconProps> = ({ className = "w-8 h-8" }) => {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 262.27 262.27" className={className}>
       <defs>
         <style>
           {`
-            .neutron-fill{fill:#ffd007;}
+            .neutron-fill{fill:${tokenConfig.theme.stableToken};}
             .neutron-stroke{fill:none;stroke:#000;stroke-miterlimit:10;stroke-width:7px;}
           `}
         </style>

@@ -9,14 +9,19 @@ import { Badge } from "@/lib/components/ui/badge";
 import { Card, CardContent } from "@/lib/components/ui/card";
 import { Copy, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
+import { tokenConfig } from "@/config/tokenConfig";
+import { ACTION_TYPES } from "@/lib/constants/token";
 
 // Inline utility functions (previously from analytics-utils)
 const getActionTypeLabel = (actionType: string): string => {
   const labels: Record<string, string> = {
-    fission: "Fission",
-    fusion: "Fusion",
-    "transmute-to-gold": "Transmute to Gold",
-    "transmute-from-gold": "Transmute from Gold",
+    [ACTION_TYPES.FISSION]: "Fission",
+    [ACTION_TYPES.FUSION]: "Fusion",
+    [ACTION_TYPES.TRANSMUTE_TO_PEG]: `To ${tokenConfig.peg.type}`,
+    [ACTION_TYPES.TRANSMUTE_FROM_PEG]: `From ${tokenConfig.peg.type}`,
+    // Legacy support for old hardcoded keys
+    "transmute-to-gold": `To ${tokenConfig.peg.type}`,
+    "transmute-from-gold": `From ${tokenConfig.peg.type}`,
   };
   return labels[actionType] || actionType;
 };
@@ -35,10 +40,15 @@ interface TransactionCardProps {
 }
 
 export const TransactionCard = ({ transaction }: TransactionCardProps) => {
-  const handleCopyHash = () => {
-    navigator.clipboard.writeText(transaction.id);
+const handleCopyHash = async () => {
+  try {
+    await navigator.clipboard.writeText(transaction.id);
     toast.success("Transaction hash copied!");
-  };
+  } catch (error) {
+    toast.error("Failed to copy transaction hash.");
+    console.error("Clipboard write failed:", error);
+  }
+};
 
   const getExplorerUrl = (txHash: string) => {
     const isTestnet = process.env.NEXT_PUBLIC_DEPLOYMENT === "testnet";
@@ -78,10 +88,21 @@ export const TransactionCard = ({ transaction }: TransactionCardProps) => {
             <code className="flex-1 truncate">
               {transaction.id.slice(0, 8)}...{transaction.id.slice(-8)}
             </code>
-            <button onClick={handleCopyHash} className="rounded p-1 hover:bg-accent" title="Copy transaction hash">
+            <button
+              type="button"
+              onClick={handleCopyHash}
+              className="rounded p-1 transition-colors hover:bg-[color-mix(in_oklab,hsl(var(--background))_93%,hsl(var(--primary))_7%)] hover:text-[hsl(var(--button-hover-foreground))]"
+              title="Copy transaction hash"
+            >
               <Copy className="h-4 w-4" />
             </button>
-            <a href={getExplorerUrl(transaction.id)} target="_blank" rel="noopener noreferrer" className="rounded p-1 hover:bg-accent" title="View in explorer">
+            <a
+              href={getExplorerUrl(transaction.id)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded p-1 transition-colors hover:bg-[color-mix(in_oklab,hsl(var(--background))_93%,hsl(var(--primary))_7%)] hover:text-[hsl(var(--button-hover-foreground))]"
+              title="View in explorer"
+            >
               <ExternalLink className="h-4 w-4" />
             </a>
           </div>
@@ -96,14 +117,14 @@ export const TransactionCard = ({ transaction }: TransactionCardProps) => {
               </span>
             </div>
             <div>
-              <span className="text-muted-foreground">GAU:</span>
+              <span className="text-muted-foreground">{tokenConfig.stableAsset.symbol}:</span>
               <span className={`ml-2 ${Number(transaction.expectedChanges.gau) >= 0 ? "text-green-500" : "text-red-500"}`}>
                 {Number(transaction.expectedChanges.gau) >= 0 ? "+" : ""}
                 {nanoErgsToErgs(transaction.expectedChanges.gau).toString()}
               </span>
             </div>
             <div>
-              <span className="text-muted-foreground">GAUC:</span>
+              <span className="text-muted-foreground">{tokenConfig.volatileAsset.symbol}:</span>
               <span className={`ml-2 ${Number(transaction.expectedChanges.gauc) >= 0 ? "text-green-500" : "text-red-500"}`}>
                 {Number(transaction.expectedChanges.gauc) >= 0 ? "+" : ""}
                 {nanoErgsToErgs(transaction.expectedChanges.gauc).toString()}

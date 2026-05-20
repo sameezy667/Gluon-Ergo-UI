@@ -1,17 +1,18 @@
 import React from "react";
+import { tokenConfig } from "@/config/tokenConfig";
 
 interface GaucIconProps {
   className?: string;
 }
 
-// GAUC Icon - Red colored token
+// Volatile asset icon - configurable colored token
 const GaucIcon: React.FC<GaucIconProps> = ({ className = "w-8 h-8" }) => {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 262.27 262.27" className={className}>
       <defs>
         <style>
           {`
-            .gauc-fill{fill:#e4201f;}
+            .gauc-fill{fill:${tokenConfig.theme.volatileToken};}
             .gauc-stroke{fill:none;stroke:#fff;stroke-miterlimit:10;stroke-width:7px;}
           `}
         </style>
