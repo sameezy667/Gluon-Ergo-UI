@@ -166,7 +166,7 @@ export const calculateTransmutationAmounts = async ({
   }
 };
 
-export const handleTransmuteToGoldSwap = async ({
+export const handleTransmuteToNeutronSwap = async ({
   gluonInstance,
   gluonBoxJs,
   oracleBoxJs,
@@ -184,7 +184,7 @@ export const handleTransmuteToGoldSwap = async ({
   amount: string;
 }): Promise<{ txHash?: string; error?: string }> => {
   try {
-    console.log("🔍 TRANSMUTE TO GOLD SWAP INPUT:", {
+    console.log("🔍 TRANSMUTE TO NEUTRON SWAP INPUT:", {
       amount,
       type: typeof amount,
     });
@@ -226,7 +226,7 @@ export const handleTransmuteToGoldSwap = async ({
     }
 
     const protonsToTransmute = convertToDecimals(amount);
-    console.log("🔍 TRANSMUTE TO GOLD AMOUNT:", {
+    console.log("🔍 TRANSMUTE TO NEUTRON AMOUNT:", {
       protonsToTransmute: protonsToTransmute.toString(),
     });
 
@@ -258,7 +258,7 @@ export const handleTransmuteToGoldSwap = async ({
 
     return { txHash };
   } catch (error) {
-    console.error("TransmuteToGold failed:", error);
+    console.error("TransmuteToNeutron failed:", error);
 
     // Use the error handler for proper classification and toast notification
     const errorDetails = handleTransactionError(error, "transmute to neutron");
@@ -267,7 +267,7 @@ export const handleTransmuteToGoldSwap = async ({
   }
 };
 
-export const handleTransmuteFromGoldSwap = async ({
+export const handleTransmuteToProtonSwap = async ({
   gluonInstance,
   gluonBoxJs,
   oracleBoxJs,
@@ -285,7 +285,7 @@ export const handleTransmuteFromGoldSwap = async ({
   amount: string;
 }): Promise<{ txHash?: string; error?: string }> => {
   try {
-    console.log("🔍 TRANSMUTE FROM GOLD SWAP INPUT:", {
+    console.log("🔍 TRANSMUTE TO PROTON SWAP INPUT:", {
       amount,
       type: typeof amount,
     });
@@ -322,7 +322,7 @@ export const handleTransmuteFromGoldSwap = async ({
     }
 
     const neutronsToDecay = convertToDecimals(amount);
-    console.log("🔍 TRANSMUTE FROM GOLD AMOUNT:", {
+    console.log("🔍 TRANSMUTE TO PROTON AMOUNT:", {
       neutronsToDecay: neutronsToDecay.toString(),
     });
 
@@ -354,7 +354,7 @@ export const handleTransmuteFromGoldSwap = async ({
 
     return { txHash };
   } catch (error) {
-    console.error("TransmuteFromGold failed:", error);
+    console.error("TransmuteToProton failed:", error);
 
     // Use the error handler for proper classification and toast notification
     const errorDetails = handleTransactionError(error, "transmute to proton");

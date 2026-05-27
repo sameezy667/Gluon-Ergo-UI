@@ -214,6 +214,8 @@ export function handleTransactionError(error: Error | string | unknown, actionTy
       case "fusion":
         userMessage = "Insufficient token balance for fusion. Please check your token balances.";
         break;
+      case "transmute to neutron":
+      case "transmute to proton":
       case "transmutation":
         userMessage = "Insufficient token balance for transmutation.";
         break;

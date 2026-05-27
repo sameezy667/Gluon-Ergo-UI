@@ -19,7 +19,7 @@ import { Token, TokenSymbol, ReceiptDetails } from "@/lib/functions/reactor/type
 import { defaultTokens, getValidToTokens, getActionType, getDescription, getTitle, formatValue } from "@/lib/functions/reactor/utils";
 import { calculateFissionAmounts, handleFissionSwap } from "@/lib/functions/reactor/handleFission";
 import { calculateFusionAmounts, handleFusionSwap } from "@/lib/functions/reactor/handleFusion";
-import { calculateTransmutationAmounts, handleTransmuteToGoldSwap, handleTransmuteFromGoldSwap } from "@/lib/functions/reactor/handleTransmutation";
+import { calculateTransmutationAmounts, handleTransmuteToNeutronSwap, handleTransmuteToProtonSwap } from "@/lib/functions/reactor/handleTransmutation";
 import { debounce } from "lodash";
 import { handleInitializationError } from "@/lib/utils/error-handler";
 import ErgIcon from "@/lib/components/icons/ErgIcon";
@@ -28,10 +28,6 @@ import ProtonIcon from "@/lib/components/icons/ProtonIcon";
 import NeutronProtonIcon from "@/lib/components/icons/NeutronProtonIcon";
 import { tokenConfig } from "@/config/tokenConfig";
 import { motion, AnimatePresence } from "framer-motion";
-// Legacy imports for backward compatibility
-import GauIcon from "@/lib/components/icons/NeutronIcon";
-import GaucIcon from "@/lib/components/icons/ProtonIcon";
-import GauGaucIcon from "@/lib/components/icons/NeutronProtonIcon";
 
 const formatTokenAmount = (value: number | string): string => {
   const numValue = typeof value === "string" ? parseFloat(value) : value;
@@ -833,7 +829,7 @@ export function ReactorSwap() {
       } else if (fromToken.symbol === pairSymbol && toToken.symbol === "ERG") {
         result = await handleFusionSwap(gluonInstance, gluonBox, oracleBox, utxos, nodeService, ergoWallet, toAmount);
       } else if (fromToken.symbol === volatileSymbol && toToken.symbol === stableSymbol) {
-        result = await handleTransmuteToGoldSwap({
+        result = await handleTransmuteToNeutronSwap({
           gluonInstance,
           gluonBoxJs: gluonBox,
           oracleBoxJs: oracleBox,
@@ -843,7 +839,7 @@ export function ReactorSwap() {
           amount: fromAmount,
         });
       } else if (fromToken.symbol === stableSymbol && toToken.symbol === volatileSymbol) {
-        result = await handleTransmuteFromGoldSwap({
+        result = await handleTransmuteToProtonSwap({
           gluonInstance,
           gluonBoxJs: gluonBox,
           oracleBoxJs: oracleBox,
@@ -1045,41 +1041,12 @@ export function ReactorSwap() {
       }
     };
 
-    // Helper function to get token colors
-    const getTokenColors = (symbol: string) => {
-      switch (symbol) {
-        case "ERG":
-          return {
-            trigger: "bg-muted border border-border text-foreground transition-colors",
-            content: "border-border",
-            item: "data-[highlighted]:bg-muted data-[highlighted]:text-primary focus:bg-muted focus:text-primary",
-          };
-        case "GAU":
-          return {
-            trigger: "bg-muted border border-border text-foreground transition-colors",
-            content: "border-border",
-            item: "data-[highlighted]:bg-muted data-[highlighted]:text-primary focus:bg-muted focus:text-primary",
-          };
-        case "GAUC":
-          return {
-            trigger: "bg-muted border border-border text-foreground transition-colors",
-            content: "border-border",
-            item: "data-[highlighted]:bg-muted data-[highlighted]:text-primary focus:bg-muted focus:text-primary",
-          };
-        case "GAU-GAUC":
-          return {
-            trigger: "bg-muted border border-border text-foreground transition-colors",
-            content: "border-border",
-            item: "data-[highlighted]:bg-muted data-[highlighted]:text-primary focus:bg-muted focus:text-primary",
-          };
-        default:
-          return {
-            trigger: "bg-muted border border-border text-foreground transition-colors",
-            content: "border-border",
-            item: "data-[highlighted]:bg-muted data-[highlighted]:text-primary focus:bg-muted focus:text-primary",
-          };
-      }
-    };
+    // All tokens share the same color scheme; returns a consistent style object.
+    const getTokenColors = (_symbol: string) => ({
+      trigger: "bg-muted border border-border text-foreground transition-colors",
+      content: "border-border",
+      item: "data-[highlighted]:bg-muted data-[highlighted]:text-primary focus:bg-muted focus:text-primary",
+    });
 
     const tokenColors = getTokenColors(currentToken.symbol);
 
@@ -1230,7 +1197,7 @@ export function ReactorSwap() {
               whileHover={{ scale: 1.01 }}
             >
               <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center">
-                <GauIcon className="h-8 w-8 flex-shrink-0" />
+                <NeutronIcon className="h-8 w-8 flex-shrink-0" />
               </div>
               <AnimatePresence mode="wait">
                 <motion.span
@@ -1258,7 +1225,7 @@ export function ReactorSwap() {
               whileHover={{ scale: 1.01 }}
             >
               <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center">
-                <GaucIcon className="h-8 w-8 flex-shrink-0" />
+                <ProtonIcon className="h-8 w-8 flex-shrink-0" />
               </div>
               <AnimatePresence mode="wait">
                 <motion.span

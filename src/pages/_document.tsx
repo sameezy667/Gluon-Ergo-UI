@@ -12,7 +12,6 @@ export default function Document() {
     <Html lang="en" style={tokenThemeCssVariables as React.CSSProperties}>
       <Head>
         <meta charSet="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="theme-color" content={tokenConfig.theme.primary} />
         <meta name="robots" content="index, follow" />
         <meta name="google" content="notranslate" />

@@ -3,11 +3,11 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --webpack",
     "dev:gold": "node -e \"require('fs').copyFileSync('.env.gold', '.env.local')\" && bun run dev",
     "dev:dollar": "node -e \"require('fs').copyFileSync('.env.dollar', '.env.local')\" && bun run dev",
     "buildtest": "next build",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "next lint",
     "test": "bun test",
