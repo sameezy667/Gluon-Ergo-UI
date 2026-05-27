@@ -28,10 +28,6 @@ import ProtonIcon from "@/lib/components/icons/ProtonIcon";
 import NeutronProtonIcon from "@/lib/components/icons/NeutronProtonIcon";
 import { tokenConfig } from "@/config/tokenConfig";
 import { motion, AnimatePresence } from "framer-motion";
-// Legacy imports for backward compatibility
-import GauIcon from "@/lib/components/icons/NeutronIcon";
-import GaucIcon from "@/lib/components/icons/ProtonIcon";
-import GauGaucIcon from "@/lib/components/icons/NeutronProtonIcon";
 
 const formatTokenAmount = (value: number | string): string => {
   const numValue = typeof value === "string" ? parseFloat(value) : value;
@@ -1045,41 +1041,12 @@ export function ReactorSwap() {
       }
     };
 
-    // Helper function to get token colors
-    const getTokenColors = (symbol: string) => {
-      switch (symbol) {
-        case "ERG":
-          return {
-            trigger: "bg-muted border border-border text-foreground transition-colors",
-            content: "border-border",
-            item: "data-[highlighted]:bg-muted data-[highlighted]:text-primary focus:bg-muted focus:text-primary",
-          };
-        case "GAU":
-          return {
-            trigger: "bg-muted border border-border text-foreground transition-colors",
-            content: "border-border",
-            item: "data-[highlighted]:bg-muted data-[highlighted]:text-primary focus:bg-muted focus:text-primary",
-          };
-        case "GAUC":
-          return {
-            trigger: "bg-muted border border-border text-foreground transition-colors",
-            content: "border-border",
-            item: "data-[highlighted]:bg-muted data-[highlighted]:text-primary focus:bg-muted focus:text-primary",
-          };
-        case "GAU-GAUC":
-          return {
-            trigger: "bg-muted border border-border text-foreground transition-colors",
-            content: "border-border",
-            item: "data-[highlighted]:bg-muted data-[highlighted]:text-primary focus:bg-muted focus:text-primary",
-          };
-        default:
-          return {
-            trigger: "bg-muted border border-border text-foreground transition-colors",
-            content: "border-border",
-            item: "data-[highlighted]:bg-muted data-[highlighted]:text-primary focus:bg-muted focus:text-primary",
-          };
-      }
-    };
+    // All tokens share the same color scheme; returns a consistent style object.
+    const getTokenColors = (_symbol: string) => ({
+      trigger: "bg-muted border border-border text-foreground transition-colors",
+      content: "border-border",
+      item: "data-[highlighted]:bg-muted data-[highlighted]:text-primary focus:bg-muted focus:text-primary",
+    });
 
     const tokenColors = getTokenColors(currentToken.symbol);
 
@@ -1230,7 +1197,7 @@ export function ReactorSwap() {
               whileHover={{ scale: 1.01 }}
             >
               <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center">
-                <GauIcon className="h-8 w-8 flex-shrink-0" />
+                <NeutronIcon className="h-8 w-8 flex-shrink-0" />
               </div>
               <AnimatePresence mode="wait">
                 <motion.span
@@ -1258,7 +1225,7 @@ export function ReactorSwap() {
               whileHover={{ scale: 1.01 }}
             >
               <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center">
-                <GaucIcon className="h-8 w-8 flex-shrink-0" />
+                <ProtonIcon className="h-8 w-8 flex-shrink-0" />
               </div>
               <AnimatePresence mode="wait">
                 <motion.span

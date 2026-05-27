@@ -164,26 +164,23 @@ const hexToHslChannels = (hexColor: string): string => {
 };
 
 /**
- * Smart formatting for peg asset names.
- * Currency codes (USD, EUR, etc.) stay uppercase.
- * Commodity names (Gold, Silver, etc.) become lowercase for sentences.
+ * Format peg asset for use in sentences.
+ * Preserves uppercase for currency codes (USD, EUR, BTC, ETH, etc.), uses lowercase for commodities (gold, silver).
+ * Pass an explicit asset string during module initialisation (before tokenConfig is built);
+ * call with no argument everywhere else to read from tokenConfig.peg.type.
  */
-const formatPegAssetForSentence = (asset: string): string => {
-  // Check if it's likely a currency code:
-  // - 2-4 characters
-  // - All uppercase or title case
-  // - Common currency codes
-  const currencyCodes = ["USD", "EUR", "GBP", "JPY", "CHF", "AUD", "CAD", "CNY", "INR"];
-  
+export const formatPegAsset = (asset: string = tokenConfig.peg.type): string => {
+  const currencyCodes = ["USD", "EUR", "GBP", "JPY", "CHF", "AUD", "CAD", "CNY", "INR", "BTC", "ETH"];
+
   if (currencyCodes.includes(asset.toUpperCase())) {
     return asset.toUpperCase();
   }
-  
+
   // If it's 2-4 chars and all uppercase, assume it's a currency code
   if (asset.length >= 2 && asset.length <= 4 && asset === asset.toUpperCase()) {
     return asset;
   }
-  
+
   // Otherwise, it's a commodity name - lowercase it
   return asset.toLowerCase();
 };
@@ -201,13 +198,13 @@ const generateStableDescription = () => {
   }
   
   // For quantities like "1g", "1oz", add "of {asset}"
-  const formattedAsset = formatPegAssetForSentence(pegAsset);
+  const formattedAsset = formatPegAsset(pegAsset);
   return `The stablecoin pegged to ${pegUnit} of ${formattedAsset}.`;
 };
 
 const pegDescription =
   process.env.NEXT_PUBLIC_PEG_DESCRIPTION ||
-  (pegUnit.toLowerCase().includes(pegAsset.toLowerCase()) ? `Pegged to ${pegUnit}.` : `Pegged to ${pegUnit} of ${formatPegAssetForSentence(pegAsset)}.`);
+  (pegUnit.toLowerCase().includes(pegAsset.toLowerCase()) ? `Pegged to ${pegUnit}.` : `Pegged to ${pegUnit} of ${formatPegAsset(pegAsset)}.`);
 
 // Protocol configuration - configurable via environment variables
 export const tokenConfig: TokenConfig = {
@@ -289,25 +286,3 @@ export const getBaseAssetSymbol = (): string => tokenConfig.baseAsset.symbol;
 
 // Helper to get peg description
 export const getPegDescription = (): string => tokenConfig.peg.description;
-
-/**
- * Format peg asset for use in sentences.
- * Preserves uppercase for currency codes (USD, EUR), uses lowercase for commodities (gold, silver).
- */
-export const formatPegAsset = (): string => {
-  const asset = tokenConfig.peg.type;
-  const currencyCodes = ["USD", "EUR", "GBP", "JPY", "CHF", "AUD", "CAD", "CNY", "INR", "BTC", "ETH"];
-  
-  if (currencyCodes.includes(asset.toUpperCase())) {
-    return asset.toUpperCase();
-  }
-  
-  // If it's 2-4 chars and all uppercase, assume it's a currency code
-  if (asset.length >= 2 && asset.length <= 4 && asset === asset.toUpperCase()) {
-    return asset;
-  }
-  
-  // Otherwise, it's a commodity name - lowercase it
-  return asset.toLowerCase();
-};
-

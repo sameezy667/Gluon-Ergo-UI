@@ -13,9 +13,6 @@ import ErgIcon from "@/lib/components/icons/ErgIcon";
 import NeutronIcon from "@/lib/components/icons/NeutronIcon";
 import ProtonIcon from "@/lib/components/icons/ProtonIcon";
 import { tokenConfig } from "@/config/tokenConfig";
-// Legacy imports for backward compatibility
-import GauIcon from "@/lib/components/icons/NeutronIcon";
-import GaucIcon from "@/lib/components/icons/ProtonIcon";
 
 interface WalletStats {
   ergBalance: string;
