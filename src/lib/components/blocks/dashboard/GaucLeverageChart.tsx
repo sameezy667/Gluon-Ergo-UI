@@ -2,8 +2,8 @@
 
 import { useState, useMemo } from "react";
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
-  ResponsiveContainer, Legend, ReferenceLine
+  LineChart, Line, XAxis, YAxis, CartesianGrid, ReferenceLine,
+  Tooltip as RechartsTooltip, ResponsiveContainer
 } from "recharts";
 import type { TooltipProps } from "recharts";
 import { format as dateFnsFormat } from "date-fns";
@@ -14,26 +14,28 @@ import { useTheme } from "next-themes";
 type TimeRange = "ALL" | "90D" | "30D";
 const SPARSE_THRESHOLD = 10;
 
+interface GaucLeverageChartProps {
+  goldPriceNanoErg: number;
+  totalNeutronSupply: number;
+  currentLeverage: number;
+}
+
 const CustomTooltip = ({ active, payload, label }: TooltipProps<number, string>) => {
   if (!active || !payload?.length) return null;
-  const apy = payload.find(p => p.dataKey === "apy")?.value;
-  const apr = payload.find(p => p.dataKey === "apr")?.value;
+  const lev = payload[0]?.value;
   const dateStr = dateFnsFormat(new Date(label as number), "MMM d, yyyy HH:mm");
 
   return (
     <div className="rounded-lg border border-gray-200 dark:border-white/10 bg-white dark:bg-[#1e1e1e] px-3 py-2 text-xs shadow-md dark:shadow-none">
       <p className="mb-1 text-gray-500 dark:text-white/40">{dateStr}</p>
-      {typeof apy === "number" && (
-        <p className="text-sm font-semibold text-emerald-500">APY: {(apy * 100).toFixed(2)}%</p>
-      )}
-      {typeof apr === "number" && (
-        <p className="text-sm font-semibold text-emerald-400">APR: {(apr * 100).toFixed(2)}%</p>
-      )}
+      <p className="text-sm font-semibold text-amber-400">
+        {typeof lev === "number" ? `${lev.toFixed(2)}x` : "—"} Leverage
+      </p>
     </div>
   );
 };
 
-export function GaucYieldChart() {
+export function GaucLeverageChart({ currentLeverage, goldPriceNanoErg, totalNeutronSupply }: GaucLeverageChartProps) {
   const [range, setRange] = useState<TimeRange>("ALL");
   const { snapshots, loading, error, migrationHeights } = useGluonTransactionHistory();
   const { resolvedTheme } = useTheme();
@@ -42,7 +44,7 @@ export function GaucYieldChart() {
   const isSparse = snapshots.length < SPARSE_THRESHOLD;
 
   const chartData = useMemo(() => {
-    if (snapshots.length < 2) return [];
+    if (!goldPriceNanoErg || !totalNeutronSupply) return [];
 
     let filtered = snapshots;
     if (!isSparse && range !== "ALL") {
@@ -51,53 +53,33 @@ export function GaucYieldChart() {
       filtered = snapshots.filter(s => s.timestamp >= cutoff);
     }
 
-    if (filtered.length < 2) return [];
+    const finalData = filtered.map(s => {
+      const circNeutronsRaw = totalNeutronSupply - s.neutronAmount;
+      if (circNeutronsRaw <= 0 || goldPriceNanoErg <= 0) return null;
 
-    // Restart fee accumulation at migration boundaries to avoid fabricating
-    // fees across a contract address change.
-    const migrationHeightSet = new Set(migrationHeights);
-    const dataPoints = [];
-    let segmentStart = 0;
+      const tvlErg = s.ergValue;
+      
+      // Step 2: Exact normalized reserve ratio logic from Gluon SDK (gluon.getReserveRatio)
+      const qstar = BigInt(660000000);
+      const rightHandMinVal = (BigInt(Math.floor(circNeutronsRaw)) * BigInt(goldPriceNanoErg)) / BigInt(Math.floor(tvlErg));
+      const fusionRatio = rightHandMinVal < qstar ? rightHandMinVal : qstar;
+      const normalizedReserveRatio = (100 * 1e9) / Number(fusionRatio);
 
-    for (let i = 1; i < filtered.length; i++) {
-      const current = filtered[i];
+      // Step 3: gaucLeverage — exactly GluonStats.tsx line 130:
+      //   gaucLeverageBN = BigNumber(Math.round(-(100 / (100 - normalizedReserveRatio)) * 100) / 100)
+      if (normalizedReserveRatio === 100) return null; // strictly prevent division by zero
 
-      // Restart the rolling window at migration boundaries
-      if (current.migrationBoundary && migrationHeightSet.has(current.height)) {
-        segmentStart = i;
-      }
+      const leverage = Math.round(-(100 / (100 - normalizedReserveRatio)) * 100) / 100;
 
-      const segmentSnapshots = filtered.slice(segmentStart, i + 1);
-      const firstSnapshot = filtered[segmentStart];
+      if (!isFinite(leverage) || Math.abs(leverage) > 100) return null;
 
-      const totalFees = segmentSnapshots.reduce((sum, s) => sum + s.feePaidErg, 0);
-      const avgErg = segmentSnapshots.reduce((sum, s) => sum + s.ergValue, 0) / segmentSnapshots.length;
-      const periodDays = (current.timestamp - firstSnapshot.timestamp) / (1000 * 60 * 60 * 24);
-
-      let apy = 0;
-      let apr = 0;
-
-      if (periodDays < 1) continue; // stability guard against artificial sub-day APY spikes
-
-      if (avgErg > 0 && periodDays > 0) {
-        // APR = (total fees / avg reserve) * (365 / period)
-        // APY = (1 + APR/365)^365 - 1  (daily compounding)
-        const periodRate = totalFees / avgErg;
-        apr = periodRate * (365 / periodDays);
-        apy = Math.pow(1 + apr / 365, 365) - 1;
-      }
-
-      dataPoints.push({
-        timestamp: current.timestamp,
-        apy,
-        apr,
-      });
-    }
+      return { timestamp: s.timestamp, leverage };
+    }).filter((p): p is { timestamp: number; leverage: number } => p !== null);
     
-    return dataPoints;
-  }, [snapshots, range, isSparse, migrationHeights]);
+    return finalData;
+  }, [snapshots, range, isSparse, goldPriceNanoErg, totalNeutronSupply, currentLeverage]);
 
-  // Subtle vertical divider at contract address change — neutral color, no label
+  // Subtle vertical divider at contract address change — neutral, no label
   const migrationTimestamps = useMemo(() => {
     if (migrationHeights.length === 0 || snapshots.length === 0) return [];
     return migrationHeights.map(mh => {
@@ -112,8 +94,11 @@ export function GaucYieldChart() {
     <div className="mt-6 rounded-xl border border-gray-200 dark:border-white/[0.07] bg-white dark:bg-[#141414] p-5">
       <div className="mb-4 flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-baseline gap-2">
-          <h3 className="text-sm font-semibold text-gray-900 dark:text-white">GAUC Yield</h3>
-          <span className="text-xs font-normal text-gray-400 dark:text-white/40">estimated from fee accumulation</span>
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-white">GAUC Leverage</h3>
+          {currentLeverage !== undefined && (
+            <span className="text-xs font-semibold text-amber-400">Live: {currentLeverage.toFixed(2)}x</span>
+          )}
+          <span className="text-xs font-normal text-gray-400 dark:text-white/40">from on-chain history</span>
           {isSparse && (
             <span className="text-xs font-medium text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded">
               Showing all {snapshots.length} available snapshots
@@ -140,7 +125,7 @@ export function GaucYieldChart() {
       </div>
 
       <div className="h-56 w-full">
-        {loading ? (
+        {loading || !goldPriceNanoErg || !totalNeutronSupply ? (
           <div className="flex h-full items-center justify-center gap-2">
             <Loader2 className="h-5 w-5 animate-spin text-gray-400 dark:text-white/40" />
             <span className="text-xs text-gray-400 dark:text-white/40">Loading on-chain history…</span>
@@ -151,9 +136,7 @@ export function GaucYieldChart() {
           </div>
         ) : chartData.length === 0 ? (
           <div className="flex h-full items-center justify-center">
-            <p className="text-xs text-gray-400 dark:text-white/40 text-center">
-              Insufficient data — only {snapshots.length} protocol transactions exist in this window
-            </p>
+            <p className="text-xs text-gray-400 dark:text-white/40 text-center">No leverage data available</p>
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
@@ -166,13 +149,20 @@ export function GaucYieldChart() {
                 axisLine={false} tickLine={false} minTickGap={30}
               />
               <YAxis
-                tickFormatter={(v) => `${(v * 100).toFixed(1)}%`}
+                tickFormatter={(v) => `${v}x`}
                 tick={{ fill: isDark ? "rgba(255,255,255,0.3)" : "#6b7280", fontSize: 11 }}
                 axisLine={false} tickLine={false}
               />
               <RechartsTooltip content={<CustomTooltip />} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-              <ReferenceLine y={0} stroke={isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.15)"} />
+
+              {currentLeverage !== undefined && (
+                <ReferenceLine
+                  y={currentLeverage}
+                  stroke="#f59e0b"
+                  strokeDasharray="4 4"
+                  label={{ value: `Live`, fill: "#f59e0b", fontSize: 10, position: "insideTopRight" }}
+                />
+              )}
 
               {/* Subtle vertical divider at contract address change — no label, neutral */}
               {migrationTimestamps.map((ts, idx) => (
@@ -185,8 +175,15 @@ export function GaucYieldChart() {
                 />
               ))}
 
-              <Line type="monotone" dataKey="apy" name="APY (compounded)" stroke="#10b981" strokeWidth={2} dot={false} isAnimationActive={true} />
-              <Line type="monotone" dataKey="apr" name="APR (simple)" stroke="#34d399" strokeWidth={1.5} strokeDasharray="4 4" dot={false} isAnimationActive={true} />
+              <Line
+                type="monotone"
+                dataKey="leverage"
+                stroke="#f59e0b"
+                strokeWidth={2}
+                dot={false}
+                isAnimationActive={true}
+                activeDot={{ r: 4, fill: "#f59e0b", stroke: "#141414", strokeWidth: 2 }}
+              />
             </LineChart>
           </ResponsiveContainer>
         )}

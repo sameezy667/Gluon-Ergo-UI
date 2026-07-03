@@ -497,12 +497,7 @@ export function GluonStats() {
       </motion.div>
       </motion.div>
 
-      <VolumeChart
-        isLoading={isLoading}
-        hasError={hasError}
-        volArrayPN={protocolMetrics.volumeArrays.protonsToNeutrons}
-        volArrayNP={protocolMetrics.volumeArrays.neutronsToProtons}
-      />
+      <VolumeChart />
     </div>
   );
 }
