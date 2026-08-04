@@ -61,11 +61,20 @@
  */
 
 import { useEffect, useState } from "react";
+import type { GluonBox as GluonBoxType, Gluon as GluonType, PegOracleBox as PegOracleBoxType } from "gluon-ergo-sdk";
+
+const DEBUG = false;
+const logDebug = (...args: unknown[]) => {
+  if (DEBUG) console.log(...args);
+};
+const warnDebug = (...args: unknown[]) => {
+  if (DEBUG) console.warn(...args);
+};
 
 const EXPLORER_BASE = "https://api.ergoplatform.com/api/v1";
 const PAGE_SIZE = 100;
 const BLOCK_TIME_MS = 120_000;
-const CACHE_KEY = "gluon_fee_breakdown_v6";
+const CACHE_KEY = "gluon_fee_breakdown_v7";
 const CACHE_TTL_MS = 30 * 60 * 1000;
 
 const NEUTRON_ID = "886b7721bef42f60c6317d37d8752da8aca01898cae7dae61808c4a14225edc8";
@@ -116,6 +125,7 @@ export interface CumulativeFeePoint {
   fusion: number;
   betaDecay: number;
   oracle: number;
+  estimated: number;
   total: number;
 }
 
@@ -203,7 +213,7 @@ interface OraclePoint {
  */
 async function fetchOracleHistory(): Promise<OraclePoint[]> {
   try {
-    console.log(`[FeeBreakdown] Fetching spanning oracle price history (NFT: ${ORACLE_POOL_NFT.slice(0, 8)}...)`);
+    logDebug(`[FeeBreakdown] Fetching spanning oracle price history (NFT: ${ORACLE_POOL_NFT.slice(0, 8)}...)`);
     const initRes = await fetch(`${EXPLORER_BASE}/boxes/byTokenId/${ORACLE_POOL_NFT}?limit=1`);
     if (!initRes.ok) return [];
     const initData = await initRes.json();
@@ -258,21 +268,21 @@ async function fetchOracleHistory(): Promise<OraclePoint[]> {
       }
     }
 
-    console.log(`[FeeBreakdown] Spanning oracle price points extracted: ${deduped.length}`);
+    logDebug(`[FeeBreakdown] Spanning oracle price points extracted: ${deduped.length}`);
     if (deduped.length > 0) {
-      console.log(
+      logDebug(
         `[FeeBreakdown] Oracle price range: ${(deduped[0].goldPriceNanoErg / 1e9).toFixed(1)} ERG/kg (height ${deduped[0].height}) → ${(deduped[deduped.length - 1].goldPriceNanoErg / 1e9).toFixed(1)} ERG/kg (height ${deduped[deduped.length - 1].height})`
       );
     }
     return deduped;
   } catch (err) {
-    console.warn("[FeeBreakdown] Oracle history fetch failed:", err);
+    warnDebug("[FeeBreakdown] Oracle history fetch failed:", err);
     return [];
   }
 }
 
 function findNearestOraclePrice(oracleHistory: OraclePoint[], height: number): number {
-  if (oracleHistory.length === 0) return 0;
+  if (!oracleHistory || oracleHistory.length === 0) return 0;
   let lo = 0;
   let hi = oracleHistory.length - 1;
   while (lo < hi) {
@@ -283,15 +293,25 @@ function findNearestOraclePrice(oracleHistory: OraclePoint[], height: number): n
   if (lo > 0) {
     const before = oracleHistory[lo - 1];
     const after = oracleHistory[lo];
-    return Math.abs(before.height - height) <= Math.abs(after.height - height)
-      ? before.goldPriceNanoErg
-      : after.goldPriceNanoErg;
+    if (before && after) {
+      return Math.abs(before.height - height) <= Math.abs(after.height - height)
+        ? before.goldPriceNanoErg
+        : after.goldPriceNanoErg;
+    }
   }
-  return oracleHistory[lo].goldPriceNanoErg;
+  return oracleHistory[lo]?.goldPriceNanoErg ?? 0;
+}
+
+interface AdaptedNodeBox {
+  boxId: string;
+  value: number;
+  assets: ExplorerAsset[];
+  additionalRegisters: Record<string, string>;
+  creationHeight: number;
 }
 
 /** Reshape an Explorer-API box into the plain-hex-register shape GluonBox expects. */
-function adaptToNodeBox(box: ExplorerBox): any {
+function adaptToNodeBox(box: ExplorerBox): AdaptedNodeBox {
   const regs: Record<string, string> = {};
   for (const [k, v] of Object.entries(box.additionalRegisters || {})) {
     regs[k] = v.serializedValue;
@@ -312,11 +332,11 @@ function hasAllRequiredRegisters(box: ExplorerBox): boolean {
 /** Duck-typed PegOracleBox — reuses the gold price scalar already extracted
  * from R4's renderedValue (proven reliable elsewhere in this codebase),
  * rather than round-tripping through a synthetic serialized register. */
-function makePegOracleLike(goldPriceNanoErgPerKg: number) {
+function makePegOracleLike(goldPriceNanoErgPerKg: number): PegOracleBoxType {
   return {
     getPrice: async () => goldPriceNanoErgPerKg,
     getPricePerGram: async () => Math.floor(goldPriceNanoErgPerKg / 1000),
-  };
+  } as unknown as PegOracleBoxType;
 }
 
 /**
@@ -325,7 +345,8 @@ function makePegOracleLike(goldPriceNanoErgPerKg: number) {
  * safely classified (missing registers, contract migration boundary).
  */
 async function computeTransitionFee(
-  sdkMod: any,
+  sdkMod: typeof import("gluon-ergo-sdk"),
+  gluon: GluonType,
   prevRaw: ExplorerBox,
   currRaw: ExplorerBox,
   goldPriceAtPrevHeight: number,
@@ -336,13 +357,12 @@ async function computeTransitionFee(
     return null;
   }
   if (!hasAllRequiredRegisters(prevRaw) || !hasAllRequiredRegisters(currRaw)) {
-    console.warn("[FeeBreakdown] Skipping transition — missing registers", prevRaw.boxId, "->", currRaw.boxId);
+    warnDebug("[FeeBreakdown] Skipping transition — missing registers", prevRaw.boxId, "->", currRaw.boxId);
     return null;
   }
 
-  const prevGluonBox = new sdkMod.GluonBox(adaptToNodeBox(prevRaw));
-  const currGluonBox = new sdkMod.GluonBox(adaptToNodeBox(currRaw));
-  const gluon = new sdkMod.Gluon();
+  const prevGluonBox: GluonBoxType = new sdkMod.GluonBox(adaptToNodeBox(prevRaw));
+  const currGluonBox: GluonBoxType = new sdkMod.GluonBox(adaptToNodeBox(currRaw));
   const pegOracle = makePegOracleLike(goldPriceAtPrevHeight);
 
   const dValue = currRaw.value - prevRaw.value;
@@ -375,14 +395,14 @@ async function computeTransitionFee(
     // on a very small fission BOTH token deltas can legitimately round to
     // exactly 0 (nanoERG has far more precision than the token unit) while
     // still being a real fission. We don't require either side to move.
-    const ergToFission = BigInt(dValue);
+    const ergToFission = BigInt(Math.trunc(dValue));
     const sNeutrons = await prevGluonBox.getNeutronsCirculatingSupply();
     const sProtons = await prevGluonBox.getProtonsCirculatingSupply();
-    const ergFissioned = BigInt(prevGluonBox.getErgFissioned());
+    const ergFissioned = BigInt(Math.trunc(prevGluonBox.getErgFissioned()));
     const fullNeutrons = (ergToFission * sNeutrons) / ergFissioned;
     const fullProtons = (ergToFission * sProtons) / ergFissioned;
-    const actualNeutrons = BigInt(-dNeutron);
-    const actualProtons = BigInt(-dProton);
+    const actualNeutrons = BigInt(Math.trunc(-dNeutron));
+    const actualProtons = BigInt(Math.trunc(-dProton));
     const dilutedNeutrons = fullNeutrons > actualNeutrons ? fullNeutrons - actualNeutrons : BigInt(0);
     const dilutedProtons = fullProtons > actualProtons ? fullProtons - actualProtons : BigInt(0);
 
@@ -408,14 +428,14 @@ async function computeTransitionFee(
     // reasoning as fission, mirrored: neither side can decrease during
     // fusion, and both sides can legitimately round to exactly 0 on a very
     // small fusion without it being any less real.
-    const ergToRedeem = BigInt(-dValue);
+    const ergToRedeem = BigInt(Math.trunc(-dValue));
     const sNeutrons = await prevGluonBox.getNeutronsCirculatingSupply();
     const sProtons = await prevGluonBox.getProtonsCirculatingSupply();
-    const ergFissioned = BigInt(prevGluonBox.getErgFissioned());
+    const ergFissioned = BigInt(Math.trunc(prevGluonBox.getErgFissioned()));
     const fullNeutrons = (ergToRedeem * sNeutrons) / ergFissioned;
     const fullProtons = (ergToRedeem * sProtons) / ergFissioned;
-    const actualNeutronsIn = BigInt(dNeutron);
-    const actualProtonsIn = BigInt(dProton);
+    const actualNeutronsIn = BigInt(Math.trunc(dNeutron));
+    const actualProtonsIn = BigInt(Math.trunc(dProton));
     const dilutedNeutrons = actualNeutronsIn > fullNeutrons ? actualNeutronsIn - fullNeutrons : BigInt(0);
     const dilutedProtons = actualProtonsIn > fullProtons ? actualProtonsIn - fullProtons : BigInt(0);
 
@@ -442,13 +462,13 @@ async function computeTransitionFee(
     // dProton is allowed to be exactly 0 on a dust-sized decay where the
     // output proton amount rounds down to nothing.
     const neutronPrice = await prevGluonBox.neutronPrice(pegOracle);
-    const transmutedVolNanoErg = (neutronPrice * BigInt(dNeutron)) / BigInt(1e9);
+    const transmutedVolNanoErg = (neutronPrice * BigInt(Math.trunc(dNeutron))) / BigInt(1e9);
     const volPlus = await prevGluonBox.getVolumeProtonsToNeutronsArray();
     const volMinus = await prevGluonBox.getVolumeNeutronsToProtonsArray();
-    const ergFissioned = BigInt(prevGluonBox.getErgFissioned());
+    const ergFissioned = BigInt(Math.trunc(prevGluonBox.getErgFissioned()));
     const phiBetaScaled: bigint = prevGluonBox.varPhiBeta(ergFissioned, volPlus, volMinus);
     const dilutionNanoErg = Number((transmutedVolNanoErg * phiBetaScaled) / BigInt(1e9));
-    const feeAmounts = await gluon.getTotalFeeAmountTransmuteToProton(prevGluonBox, pegOracle, dNeutron);
+    const feeAmounts = await gluon.getTotalFeeAmountTransmuteToProton(prevGluonBox, pegOracle, Math.trunc(dNeutron));
 
     return {
       ...base,
@@ -465,13 +485,13 @@ async function computeTransitionFee(
     // BETA DECAY: proton -> neutron (user sends protons in, gets neutrons out).
     // dNeutron is allowed to be exactly 0 for the same dust-rounding reason.
     const protonPrice = await prevGluonBox.protonPrice(pegOracle);
-    const transmutedVolNanoErg = (protonPrice * BigInt(dProton)) / BigInt(1e9);
+    const transmutedVolNanoErg = (protonPrice * BigInt(Math.trunc(dProton))) / BigInt(1e9);
     const volPlus = await prevGluonBox.getVolumeProtonsToNeutronsArray();
     const volMinus = await prevGluonBox.getVolumeNeutronsToProtonsArray();
-    const ergFissioned = BigInt(prevGluonBox.getErgFissioned());
+    const ergFissioned = BigInt(Math.trunc(prevGluonBox.getErgFissioned()));
     const phiBetaScaled: bigint = prevGluonBox.varPhiBeta(ergFissioned, volPlus, volMinus);
     const dilutionNanoErg = Number((transmutedVolNanoErg * phiBetaScaled) / BigInt(1e9));
-    const feeAmounts = await gluon.getTotalFeeAmountTransmuteToNeutron(prevGluonBox, pegOracle, dProton);
+    const feeAmounts = await gluon.getTotalFeeAmountTransmuteToNeutron(prevGluonBox, pegOracle, Math.trunc(dProton));
 
     return {
       ...base,
@@ -487,7 +507,7 @@ async function computeTransitionFee(
   // Deltas don't match any known pattern (e.g. both tokens moved the same
   // direction, or value moved without a matching token pattern). Surface it
   // rather than silently dropping the fee data.
-  console.warn("[FeeBreakdown] Unclassified transition", {
+  warnDebug("[FeeBreakdown] Unclassified transition", {
     boxId: currRaw.boxId,
     txId: prevRaw.spentTransactionId,
     explorerUrl: prevRaw.spentTransactionId
@@ -554,7 +574,7 @@ function reconstructTrueChainOrder(boxes: ExplorerBox[]): ChainResult {
       // current.spentTransactionId) wasn't in our fetched set at all. This is a
       // real gap (missed by pagination, or genuinely not indexed), not a
       // reordering issue — log it loudly rather than silently truncating.
-      console.warn("[FeeBreakdown] Chain break — missing successor box", {
+      warnDebug("[FeeBreakdown] Chain break — missing successor box", {
         afterBoxId: current.boxId,
         expectedCreatingTx: current.spentTransactionId,
       });
@@ -565,7 +585,7 @@ function reconstructTrueChainOrder(boxes: ExplorerBox[]): ChainResult {
   }
 
   if (ordered.length !== boxes.length) {
-    console.warn(
+    warnDebug(
       `[FeeBreakdown] Chain reconstruction only recovered ${ordered.length}/${boxes.length} boxes — ` +
         `falling back to height-sort for any unreachable boxes so no data is silently dropped.`
     );
@@ -601,6 +621,9 @@ export function useGluonFeeBreakdown(): UseGluonFeeBreakdownResult {
 
       try {
         const sdkMod = await import("gluon-ergo-sdk");
+        const gluon = new sdkMod.Gluon();
+        gluon.config.NETWORK = process.env.NEXT_PUBLIC_DEPLOYMENT || "testnet";
+        gluon.config.NODE_URL = process.env.NEXT_PUBLIC_NODE_URL || "https://node.ergopool.io/";
         const GLUON_NFT_ID = sdkMod.GLUON_NFT;
 
         const [allBoxes, headersRes, oracleHistory] = await Promise.all([
@@ -630,6 +653,7 @@ export function useGluonFeeBreakdown(): UseGluonFeeBreakdownResult {
 
         let chainLinkMismatches = 0;
         for (let i = 1; i < validBoxes.length; i++) {
+          if (cancelled) break;
           const prevRaw = validBoxes[i - 1];
           const currRaw = validBoxes[i];
 
@@ -638,7 +662,7 @@ export function useGluonFeeBreakdown(): UseGluonFeeBreakdownResult {
             // it happens (e.g. a leftover box appended by the fallback path),
             // flag it rather than silently diffing two non-adjacent boxes.
             chainLinkMismatches++;
-            console.warn("[FeeBreakdown] Chain link mismatch — diffing non-adjacent boxes", {
+            warnDebug("[FeeBreakdown] Chain link mismatch — diffing non-adjacent boxes", {
               prevBoxId: prevRaw.boxId,
               prevSpentTx: prevRaw.spentTransactionId,
               currBoxId: currRaw.boxId,
@@ -659,7 +683,7 @@ export function useGluonFeeBreakdown(): UseGluonFeeBreakdownResult {
             continue;
           }
 
-          const fee = await computeTransitionFee(sdkMod, prevRaw, currRaw, goldPriceAtPrev, timestamp);
+          const fee = await computeTransitionFee(sdkMod, gluon, prevRaw, currRaw, goldPriceAtPrev, timestamp);
           if (fee) {
             if (fee.category === "unknown") unclassified++;
             newTransitions.push(fee);
@@ -672,10 +696,17 @@ export function useGluonFeeBreakdown(): UseGluonFeeBreakdownResult {
         let cFusion = 0;
         let cBetaDecay = 0;
         let cOracle = 0;
+        let cUnknown = 0;
+        let cEstimated = 0;
         for (const t of newTransitions) {
           if (t.category === "fission") cFission += t.totalFeeErg;
           else if (t.category === "fusion") cFusion += t.totalFeeErg;
-          else if (t.category === "betaDecay") cBetaDecay += t.totalFeeErg;
+          else if (t.category === "betaDecay") {
+            cBetaDecay += t.totalFeeErg;
+            cEstimated += t.dilutionValueErg;
+          } else if (t.category === "unknown") {
+            cUnknown += t.devFeeErg;
+          }
           cOracle += t.oracleFeeErg;
           newPoints.push({
             height: t.height,
@@ -684,7 +715,8 @@ export function useGluonFeeBreakdown(): UseGluonFeeBreakdownResult {
             fusion: cFusion,
             betaDecay: cBetaDecay,
             oracle: cOracle,
-            total: cFission + cFusion + cBetaDecay + cOracle,
+            estimated: cEstimated,
+            total: cFission + cFusion + cBetaDecay + cOracle + cUnknown,
           });
         }
 
