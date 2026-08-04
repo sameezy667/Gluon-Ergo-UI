@@ -254,7 +254,7 @@ async function fetchOracleHistory(): Promise<OraclePoint[]> {
  * Falls back to 0 if oracleHistory is empty.
  */
 function findNearestOraclePrice(oracleHistory: OraclePoint[], height: number): number {
-  if (oracleHistory.length === 0) return 0;
+  if (!oracleHistory || oracleHistory.length === 0) return 0;
   let lo = 0;
   let hi = oracleHistory.length - 1;
   while (lo < hi) {
@@ -266,11 +266,13 @@ function findNearestOraclePrice(oracleHistory: OraclePoint[], height: number): n
   if (lo > 0) {
     const before = oracleHistory[lo - 1];
     const after = oracleHistory[lo];
-    return Math.abs(before.height - height) <= Math.abs(after.height - height)
-      ? before.goldPriceNanoErg
-      : after.goldPriceNanoErg;
+    if (before && after) {
+      return Math.abs(before.height - height) <= Math.abs(after.height - height)
+        ? before.goldPriceNanoErg
+        : after.goldPriceNanoErg;
+    }
   }
-  return oracleHistory[lo].goldPriceNanoErg;
+  return oracleHistory[lo]?.goldPriceNanoErg ?? 0;
 }
 
 export function useGluonTransactionHistory(): UseGluonTransactionHistoryResult {
