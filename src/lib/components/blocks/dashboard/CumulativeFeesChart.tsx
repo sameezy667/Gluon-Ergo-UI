@@ -136,9 +136,9 @@ export function CumulativeFeesChart() {
   // ── Y-axis: scale to the max total in view ─────────────────────────────
   const yAxisMax = useMemo(() => {
     if (chartData.length === 0) return 1;
-    const maxTotal = Math.max(
-      ...chartData.map((d) => d.total - (showBetaEstimate ? 0 : d.betaDecay))
-    );
+    const stackedMax = Math.max(...chartData.map((d) => d.fission + d.fusion + d.oracle));
+    const betaMax = showBetaEstimate ? Math.max(...chartData.map((d) => d.betaDecay)) : 0;
+    const maxTotal = Math.max(stackedMax, betaMax);
     if (maxTotal <= 0) return 1;
     // Round up to a clean value
     const magnitude = Math.pow(10, Math.floor(Math.log10(maxTotal)));
@@ -185,15 +185,17 @@ export function CumulativeFeesChart() {
                 value={lastPoint.oracle}
                 colorClass="text-teal-500 bg-teal-500/10 border-teal-500/20"
               />
-              <StatPill
-                label="β Dilution †"
-                value={lastPoint.betaDecay}
-                colorClass="text-purple-400 bg-purple-500/10 border-purple-500/20"
-                isEstimate
-              />
+              {showBetaEstimate && (
+                <StatPill
+                  label="β Dilution †"
+                  value={lastPoint.betaDecay}
+                  colorClass="text-purple-400 bg-purple-500/10 border-purple-500/20"
+                  isEstimate
+                />
+              )}
               <StatPill
                 label="Total"
-                value={lastPoint.total - (showBetaEstimate ? 0 : lastPoint.betaDecay)}
+                value={lastPoint.total - (showBetaEstimate ? 0 : lastPoint.estimated)}
                 colorClass="text-gray-900 dark:text-white bg-gray-100 dark:bg-white/5 border-gray-200 dark:border-white/10"
                 bold
               />
