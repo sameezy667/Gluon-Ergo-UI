@@ -1,0 +1,412 @@
+"use client";
+
+import { useState, useMemo } from "react";
+import {
+  ComposedChart,
+  Area,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip as RechartsTooltip,
+  ResponsiveContainer,
+  Legend,
+} from "recharts";
+import type { TooltipProps } from "recharts";
+import { format as dateFnsFormat } from "date-fns";
+import { Loader2 } from "lucide-react";
+import { useGluonFeeBreakdown } from "@/lib/hooks/useGluonFeeBreakdown";
+import { useTheme } from "next-themes";
+
+/**
+ * CumulativeFeesChart
+ *
+ * Displays cumulative protocol fees split into four categories:
+ *   - Fission dev fee + dilution value  (exact)      ── indigo solid area
+ *   - Fusion dev fee + dilution value   (exact)      ── amber solid area
+ *   - Oracle fee on beta-decay txs      (exact*)     ── teal solid area
+ *   - Beta-decay dilution value         (estimate †) ── purple dashed line
+ *
+ * The first three are stacked solid areas. The beta-decay dilution is a
+ * separate dashed line (not stacked), clearly marked as an estimate, and
+ * can be toggled off by the user.
+ *
+ * Precision notes:
+ *   - Fission/fusion: exact register diff + algebraic token-shortfall × price
+ *   - Oracle: exact given token price at each block (SDK: 0.1% × ERG volume)
+ *   - Beta-decay dilution †: varPhiBeta rate × per-tx volume (rate-based estimate)
+ *
+ * Chart conventions match GaucYieldChart.tsx and ReserveRatioChart.tsx:
+ *   - Card wrapper, time-range buttons (ALL/90D/30D)
+ *   - Month-only X-axis ticks (one per calendar month)
+ *   - Custom tooltip with dark/light support
+ *   - Footnote row for block-height approximation
+ */
+
+type TimeRange = "ALL" | "90D" | "30D";
+const SPARSE_THRESHOLD = 10;
+
+// ─── Tooltip ────────────────────────────────────────────────────────────────
+
+const CustomTooltip = ({ active, payload, label }: TooltipProps<number, string>) => {
+  if (!active || !payload?.length) return null;
+
+  const get = (key: string) => payload.find((p) => p.dataKey === key)?.value as number | undefined;
+  const fission = get("fission");
+  const fusion = get("fusion");
+  const oracle = get("oracle");
+  const betaDecay = get("betaDecay");
+  const exactTotal = (fission ?? 0) + (fusion ?? 0) + (oracle ?? 0);
+  const displayedTotal = exactTotal + (typeof betaDecay === "number" ? betaDecay : 0);
+
+  const dateStr = dateFnsFormat(new Date(label as number), "MMM d, yyyy");
+
+  return (
+    <div className="rounded-lg border border-gray-200 dark:border-white/10 bg-white dark:bg-[#1e1e1e] px-3 py-2 text-xs shadow-md dark:shadow-none min-w-[200px]">
+      <p className="mb-2 text-gray-500 dark:text-white/40">{dateStr}</p>
+      {typeof fission === "number" && (
+        <p className="text-indigo-500 dark:text-indigo-400">
+          Fission: {fission.toFixed(4)} ERG
+        </p>
+      )}
+      {typeof fusion === "number" && (
+        <p className="text-amber-500 dark:text-amber-400">
+          Fusion: {fusion.toFixed(4)} ERG
+        </p>
+      )}
+      {typeof oracle === "number" && (
+        <p className="text-teal-500 dark:text-teal-400">
+          Oracle: {oracle.toFixed(4)} ERG
+        </p>
+      )}
+      {typeof betaDecay === "number" && (
+        <p className="text-purple-400">
+          β Dilution †: {betaDecay.toFixed(4)} ERG
+        </p>
+      )}
+      <p className="mt-1 pt-1 border-t border-gray-100 dark:border-white/10 font-semibold text-gray-900 dark:text-white">
+        Total: {displayedTotal.toFixed(4)} ERG
+      </p>
+      <p className="mt-1 text-[10px] text-gray-400 dark:text-white/25">
+        † Beta-decay dilution is estimated
+      </p>
+    </div>
+  );
+};
+
+// ─── Component ───────────────────────────────────────────────────────────────
+
+export function CumulativeFeesChart() {
+  const [range, setRange] = useState<TimeRange>("ALL");
+  const [showBetaEstimate, setShowBetaEstimate] = useState(true);
+  const { points, loading, error } = useGluonFeeBreakdown();
+  const { resolvedTheme } = useTheme();
+
+  const isDark = resolvedTheme === "dark";
+  const isSparse = points.length < SPARSE_THRESHOLD;
+
+  // ── Filter by time range ────────────────────────────────────────────────
+  const chartData = useMemo(() => {
+    if (points.length === 0) return [];
+
+    let filtered = points;
+    if (!isSparse && range !== "ALL") {
+      const days = range === "90D" ? 90 : 30;
+      const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+      filtered = points.filter((p) => p.timestamp >= cutoff);
+    }
+
+    return filtered;
+  }, [points, range, isSparse]);
+
+  // ── X-axis: one tick per calendar month ────────────────────────────────
+  const monthTicks = useMemo(() => {
+    const seen = new Set<string>();
+    const ticks: number[] = [];
+    for (const d of chartData) {
+      const key = dateFnsFormat(new Date(d.timestamp), "yyyy-MM");
+      if (!seen.has(key)) {
+        seen.add(key);
+        ticks.push(d.timestamp);
+      }
+    }
+    return ticks;
+  }, [chartData]);
+
+  // ── Y-axis: scale to the max total in view ─────────────────────────────
+  const yAxisMax = useMemo(() => {
+    if (chartData.length === 0) return 1;
+    const maxTotal = Math.max(
+      ...chartData.map((d) => d.total - (showBetaEstimate ? 0 : d.betaDecay))
+    );
+    if (maxTotal <= 0) return 1;
+    // Round up to a clean value
+    const magnitude = Math.pow(10, Math.floor(Math.log10(maxTotal)));
+    return Math.ceil(maxTotal / magnitude) * magnitude;
+  }, [chartData, showBetaEstimate]);
+
+  // ── Last point for header summary ──────────────────────────────────────
+  const lastPoint = chartData.length > 0 ? chartData[chartData.length - 1] : null;
+
+  // ── Render ─────────────────────────────────────────────────────────────
+  return (
+    <div className="mt-6 rounded-xl border border-gray-200 dark:border-white/[0.07] bg-white dark:bg-[#141414] p-5">
+      {/* Header row */}
+      <div className="mb-4 flex items-center justify-between flex-wrap gap-3">
+        <div className="flex flex-col gap-1">
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <h3 className="text-sm font-semibold text-gray-900 dark:text-white">
+              Protocol Fee Accumulation
+            </h3>
+            <span className="text-xs font-normal text-gray-400 dark:text-white/40">
+              exact fees only · β dilution is estimated †
+            </span>
+            {isSparse && (
+              <span className="text-xs font-medium text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded">
+                Showing all {points.length} available snapshots
+              </span>
+            )}
+          </div>
+          {/* Running totals badge row */}
+          {lastPoint && !loading && (
+            <div className="flex flex-wrap gap-2 mt-1">
+              <StatPill
+                label="Fission"
+                value={lastPoint.fission}
+                colorClass="text-indigo-500 bg-indigo-500/10 border-indigo-500/20"
+              />
+              <StatPill
+                label="Fusion"
+                value={lastPoint.fusion}
+                colorClass="text-amber-500 bg-amber-500/10 border-amber-500/20"
+              />
+              <StatPill
+                label="Oracle"
+                value={lastPoint.oracle}
+                colorClass="text-teal-500 bg-teal-500/10 border-teal-500/20"
+              />
+              <StatPill
+                label="β Dilution †"
+                value={lastPoint.betaDecay}
+                colorClass="text-purple-400 bg-purple-500/10 border-purple-500/20"
+                isEstimate
+              />
+              <StatPill
+                label="Total"
+                value={lastPoint.total - (showBetaEstimate ? 0 : lastPoint.betaDecay)}
+                colorClass="text-gray-900 dark:text-white bg-gray-100 dark:bg-white/5 border-gray-200 dark:border-white/10"
+                bold
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Controls */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Beta-decay estimate toggle */}
+          <button
+            type="button"
+            onClick={() => setShowBetaEstimate((v) => !v)}
+            className={[
+              "rounded-md px-2.5 py-0.5 text-xs font-medium transition-colors border",
+              showBetaEstimate
+                ? "bg-purple-500/10 text-purple-400 border-purple-500/20"
+                : "text-gray-400 dark:text-white/40 border-gray-200 dark:border-white/10 hover:text-gray-600 dark:hover:text-white/60",
+            ].join(" ")}
+          >
+            {showBetaEstimate ? "Hide" : "Show"} β estimate
+          </button>
+
+          {/* Time range */}
+          <div className="flex rounded-lg bg-gray-100 dark:bg-white/5 p-0.5">
+            {(["ALL", "90D", "30D"] as TimeRange[]).map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setRange(r)}
+                className={[
+                  "rounded-md px-2.5 py-0.5 text-xs font-medium transition-colors",
+                  (isSparse ? r === "ALL" : range === r)
+                    ? "bg-gray-200 dark:bg-white/10 text-gray-900 dark:text-white"
+                    : "text-gray-400 dark:text-white/40 hover:text-gray-600 dark:hover:text-white/60",
+                ].join(" ")}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Chart area */}
+      <div className="h-56 w-full">
+        {loading ? (
+          <div className="flex h-full items-center justify-center gap-2">
+            <Loader2 className="h-5 w-5 animate-spin text-gray-400 dark:text-white/40" />
+            <span className="text-xs text-gray-400 dark:text-white/40">
+              Reconstructing fee history from on-chain box data…
+            </span>
+          </div>
+        ) : error && chartData.length === 0 ? (
+          <div className="flex h-full items-center justify-center">
+            <p className="text-xs text-red-400 text-center max-w-sm">{error}</p>
+          </div>
+        ) : chartData.length === 0 ? (
+          <div className="flex h-full items-center justify-center">
+            <p className="text-xs text-gray-400 dark:text-white/40 text-center">
+              No fee data in this range — only {points.length} protocol transitions exist
+            </p>
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={chartData} margin={{ top: 4, right: 4, left: -16, bottom: 0 }}>
+              <defs>
+                {/* Fission — indigo */}
+                <linearGradient id="cfFission" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#6366f1" stopOpacity={0.4} />
+                  <stop offset="95%" stopColor="#6366f1" stopOpacity={0.05} />
+                </linearGradient>
+                {/* Fusion — amber */}
+                <linearGradient id="cfFusion" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.4} />
+                  <stop offset="95%" stopColor="#f59e0b" stopOpacity={0.05} />
+                </linearGradient>
+                {/* Oracle — teal */}
+                <linearGradient id="cfOracle" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#14b8a6" stopOpacity={0.4} />
+                  <stop offset="95%" stopColor="#14b8a6" stopOpacity={0.05} />
+                </linearGradient>
+              </defs>
+
+              <CartesianGrid
+                strokeDasharray="3 3"
+                stroke={isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.06)"}
+                vertical={false}
+              />
+
+              <XAxis
+                dataKey="timestamp"
+                type="number"
+                scale="time"
+                domain={["dataMin", "dataMax"]}
+                ticks={monthTicks}
+                tickFormatter={(v: number) => dateFnsFormat(new Date(v), "MMM")}
+                tick={{ fill: isDark ? "rgba(255,255,255,0.3)" : "#6b7280", fontSize: 11 }}
+                axisLine={false}
+                tickLine={false}
+              />
+
+              <YAxis
+                domain={[0, yAxisMax]}
+                tickFormatter={(v: number) =>
+                  v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v.toFixed(1)
+                }
+                tick={{ fill: isDark ? "rgba(255,255,255,0.3)" : "#6b7280", fontSize: 11 }}
+                axisLine={false}
+                tickLine={false}
+              />
+
+              <RechartsTooltip content={<CustomTooltip />} />
+
+              <Legend
+                wrapperStyle={{ fontSize: 11 }}
+                formatter={(value: string) => {
+                  if (value === "betaDecay") return "β Dilution † (est.)";
+                  return value.charAt(0).toUpperCase() + value.slice(1);
+                }}
+              />
+
+              {/* Stacked solid areas — exact fees */}
+              <Area
+                type="monotone"
+                dataKey="fission"
+                name="fission"
+                stackId="exact"
+                stroke="#6366f1"
+                fill="url(#cfFission)"
+                strokeWidth={1.5}
+                dot={false}
+                isAnimationActive={true}
+              />
+              <Area
+                type="monotone"
+                dataKey="fusion"
+                name="fusion"
+                stackId="exact"
+                stroke="#f59e0b"
+                fill="url(#cfFusion)"
+                strokeWidth={1.5}
+                dot={false}
+                isAnimationActive={true}
+              />
+              <Area
+                type="monotone"
+                dataKey="oracle"
+                name="oracle"
+                stackId="exact"
+                stroke="#14b8a6"
+                fill="url(#cfOracle)"
+                strokeWidth={1.5}
+                dot={false}
+                isAnimationActive={true}
+              />
+
+              {/* Dashed line — beta-decay dilution estimate (not stacked, togglable) */}
+              {showBetaEstimate && (
+                <Line
+                  type="monotone"
+                  dataKey="betaDecay"
+                  name="betaDecay"
+                  stroke="#a78bfa"
+                  strokeWidth={1.5}
+                  strokeDasharray="5 4"
+                  dot={false}
+                  isAnimationActive={true}
+                  legendType="plainline"
+                />
+              )}
+            </ComposedChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+
+      {/* Footnote row */}
+      <div className="mt-2 flex justify-between items-end flex-wrap gap-1">
+        <p className="text-[10px] text-gray-400 dark:text-white/25">
+          † Beta-decay dilution: rate-based estimate (varPhiBeta × transmuted vol). All other lines are exact.
+          Oracle fees exact given token price at each block.
+        </p>
+        <p className="text-[10px] text-gray-400 dark:text-white/25 text-right">
+          Dates are block-height estimates (±2 min/block)
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Small stat pill shown in header ─────────────────────────────────────────
+
+function StatPill({
+  label,
+  value,
+  colorClass,
+  isEstimate,
+  bold,
+}: {
+  label: string;
+  value: number;
+  colorClass: string;
+  isEstimate?: boolean;
+  bold?: boolean;
+}) {
+  return (
+    <div
+      className={`flex items-center gap-1.5 rounded-md border px-2 py-0.5 ${colorClass}`}
+    >
+      <span className="text-[10px] text-gray-500 dark:text-white/40">{label}</span>
+      <span className={`text-xs ${bold ? "font-bold" : "font-medium"}`}>
+        {value.toFixed(2)} ERG{isEstimate ? " †" : ""}
+      </span>
+    </div>
+  );
+}

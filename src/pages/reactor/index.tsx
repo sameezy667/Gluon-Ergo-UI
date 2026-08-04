@@ -7,6 +7,7 @@ import { MyStats } from "@/lib/components/blocks/dashboard/MyStats";
 import { ReserveRatioChart } from "@/lib/components/blocks/dashboard/ReserveRatioChart";
 import { GaucYieldChart } from "@/lib/components/blocks/dashboard/GaucYieldChart";
 import { GaucLeverageChart } from "@/lib/components/blocks/dashboard/GaucLeverageChart";
+import { CumulativeFeesChart } from "@/lib/components/blocks/dashboard/CumulativeFeesChart";
 import { SEO } from "@/lib/components/layout/SEO";
 import { tokenConfig } from "@/config/tokenConfig";
 import { motion } from "framer-motion";
@@ -84,6 +85,10 @@ export default function ReactorDashboard() {
 
           <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5, duration: 0.5 }}>
             <GaucYieldChart />
+          </motion.div>
+
+          <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.55, duration: 0.5 }}>
+            <CumulativeFeesChart />
           </motion.div>
 
           <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.6, duration: 0.5 }}>

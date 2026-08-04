@@ -79,6 +79,21 @@ export function GaucLeverageChart({ currentLeverage, goldPriceNanoErg, totalNeut
     return finalData;
   }, [snapshots, range, isSparse, goldPriceNanoErg, totalNeutronSupply, currentLeverage]);
 
+  // Fix 1: One tick per calendar month — placed at the first data point of
+  // each month. Prevents repeated "Aug Aug Aug" labels from Recharts auto-ticking.
+  const monthTicks = useMemo(() => {
+    const seen = new Set<string>();
+    const ticks: number[] = [];
+    for (const d of chartData) {
+      const key = dateFnsFormat(new Date(d.timestamp), "yyyy-MM");
+      if (!seen.has(key)) {
+        seen.add(key);
+        ticks.push(d.timestamp);
+      }
+    }
+    return ticks;
+  }, [chartData]);
+
   // Subtle vertical divider at contract address change — neutral, no label
   const migrationTimestamps = useMemo(() => {
     if (migrationHeights.length === 0 || snapshots.length === 0) return [];
@@ -144,9 +159,13 @@ export function GaucLeverageChart({ currentLeverage, goldPriceNanoErg, totalNeut
               <CartesianGrid strokeDasharray="3 3" stroke={isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.06)"} vertical={false} />
               <XAxis
                 dataKey="timestamp"
-                tickFormatter={(v: number) => dateFnsFormat(new Date(v), "MMM d")}
+                type="number"
+                scale="time"
+                domain={["dataMin", "dataMax"]}
+                ticks={monthTicks}
+                tickFormatter={(v: number) => dateFnsFormat(new Date(v), "MMM")}
                 tick={{ fill: isDark ? "rgba(255,255,255,0.3)" : "#6b7280", fontSize: 11 }}
-                axisLine={false} tickLine={false} minTickGap={30}
+                axisLine={false} tickLine={false}
               />
               <YAxis
                 tickFormatter={(v) => `${v}x`}
