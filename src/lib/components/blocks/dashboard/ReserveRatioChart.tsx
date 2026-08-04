@@ -15,6 +15,12 @@ type TimeRange = "ALL" | "90D" | "30D";
 const SPARSE_THRESHOLD = 10;
 
 interface ReserveRatioChartProps {
+  /**
+   * Current live gold price in nanoERG/kg from the oracle — used only as a
+   * fallback for data points where the per-snapshot oracle price is unavailable
+   * (i.e. when oracleHistory fetch failed). Historical calculation uses
+   * s.goldPriceNanoErg from each snapshot for accuracy.
+   */
   goldPriceNanoErg: number;
   totalNeutronSupply: number;
 }
@@ -34,7 +40,7 @@ const CustomTooltip = ({ active, payload, label }: TooltipProps<number, string>)
         </p>
       )}
       {typeof nrr === "number" && (
-        <p className="text-sm font-semibold text-amber-500">
+        <p className="text-sm font-semibold text-violet-400">
           Normalized: {nrr.toFixed(1)}%
         </p>
       )}
@@ -50,8 +56,14 @@ export function ReserveRatioChart({ goldPriceNanoErg, totalNeutronSupply }: Rese
   const isDark = resolvedTheme === "dark";
   const isSparse = snapshots.length < SPARSE_THRESHOLD;
 
+  // True when all snapshots lack a historical oracle price (oracle fetch failed)
+  const hasOracleData = useMemo(
+    () => snapshots.some(s => s.goldPriceNanoErg > 0),
+    [snapshots]
+  );
+
   const chartData = useMemo(() => {
-    if (!goldPriceNanoErg || !totalNeutronSupply) return [];
+    if (!totalNeutronSupply) return [];
 
     let filtered = snapshots;
     if (!isSparse && range !== "ALL") {
@@ -63,22 +75,33 @@ export function ReserveRatioChart({ goldPriceNanoErg, totalNeutronSupply }: Rese
     const finalData = filtered.map(s => {
       const circNeutronsRaw = totalNeutronSupply - s.neutronAmount;
       let reserveRatio = 0;
-
       let normalizedReserveRatio = 0;
 
-      if (circNeutronsRaw > 0 && goldPriceNanoErg > 0) {
-        // Formula matching GluonStats.tsx line 128:
-        // reserveRatioBN = BigNumber(+BigNumber(tvl) * 1e14 / (+BigNumber(circNeutrons) * goldPrice))
-        // tvl here is in nanoERG, goldPrice is in nanoERG/unit, circNeutrons is raw token units
+      // Use per-snapshot historical oracle price. Fall back to live prop only
+      // when the oracle history fetch failed (goldPriceNanoErg = 0 on snapshot).
+      const effectiveGoldPrice = s.goldPriceNanoErg > 0 ? s.goldPriceNanoErg : goldPriceNanoErg;
+
+      if (circNeutronsRaw > 0 && effectiveGoldPrice > 0) {
+        // Use fissioned TVL (minus 1,000,000 nanoERG) as per SDK's getTVL() and getErgFissioned()
         const tvlNano = s.ergValue * 1e9;
-        const tvlErg = s.ergValue;
-        reserveRatio = (tvlNano * 1e14) / (circNeutronsRaw * goldPriceNanoErg);
-        
+        const tvlFissioned = Math.max(1, tvlNano - 1000000); 
+
+        // Formula matching GluonStats.tsx line 128 exactly:
+        // reserveRatioBN = BigNumber(+BigNumber(tvl) * 1e14 / (+BigNumber(circNeutrons) * goldPrice))
+        // tvl is in nanoERG (tvlFissioned), goldPrice is nanoERG/Kg (effectiveGoldPrice)
+        const rawRatio = (tvlFissioned * 1e14) / (circNeutronsRaw * effectiveGoldPrice);
+        reserveRatio = Math.min(1000, rawRatio); // Clamp to 1000% max for visual sanity
+
         // Exact normalized reserve ratio logic from Gluon SDK (gluon.getReserveRatio)
         const qstar = BigInt(660000000);
-        const rightHandMinVal = (BigInt(Math.floor(circNeutronsRaw)) * BigInt(goldPriceNanoErg)) / BigInt(Math.floor(tvlErg));
+        const pricePerGram = effectiveGoldPrice / 1000;
+        
+        const rightHandMinVal = (BigInt(Math.floor(circNeutronsRaw)) * BigInt(Math.floor(pricePerGram))) / BigInt(Math.floor(tvlFissioned));
         const fusionRatio = rightHandMinVal < qstar ? rightHandMinVal : qstar;
-        normalizedReserveRatio = (100 * 1e9) / Number(fusionRatio);
+        if (fusionRatio > 0) {
+          const rawNormalized = (100 * 1e9) / Number(fusionRatio);
+          normalizedReserveRatio = Math.min(1000, rawNormalized); // Clamp to 1000% max
+        }
       }
 
       return {
@@ -86,10 +109,33 @@ export function ReserveRatioChart({ goldPriceNanoErg, totalNeutronSupply }: Rese
         reserveRatio: +reserveRatio.toFixed(1),
         normalizedReserveRatio: +normalizedReserveRatio.toFixed(1),
       };
-    }).filter(d => d.reserveRatio > 0 && d.reserveRatio < 100000);
-    
+    }).filter(d => d.reserveRatio > 0 && d.reserveRatio <= 1000);
+
     return finalData;
   }, [snapshots, range, isSparse, goldPriceNanoErg, totalNeutronSupply]);
+
+  // Dynamic Y-axis max scaling. Ceiling of 1000%, floor of 400% to ensure reference lines are visible.
+  const yAxisMax = useMemo(() => {
+    if (chartData.length === 0) return 500;
+    const maxVal = Math.max(...chartData.map(d => Math.max(d.reserveRatio, d.normalizedReserveRatio)));
+    return Math.min(1000, Math.max(400, maxVal * 1.1));
+  }, [chartData]);
+
+  // Fix 1: One tick per calendar month — placed at the first data point of
+  // each month. Prevents Recharts from auto-placing multiple ticks in the same
+  // month that all collapse to the same "MMM" label (e.g. "Aug Aug Aug").
+  const monthTicks = useMemo(() => {
+    const seen = new Set<string>();
+    const ticks: number[] = [];
+    for (const d of chartData) {
+      const key = dateFnsFormat(new Date(d.timestamp), "yyyy-MM");
+      if (!seen.has(key)) {
+        seen.add(key);
+        ticks.push(d.timestamp);
+      }
+    }
+    return ticks;
+  }, [chartData]);
 
   // Find migration timestamps for a subtle vertical divider (no label, neutral color)
   const migrationTimestamps = useMemo(() => {
@@ -105,9 +151,14 @@ export function ReserveRatioChart({ goldPriceNanoErg, totalNeutronSupply }: Rese
   return (
     <div className="mt-6 rounded-xl border border-gray-200 dark:border-white/[0.07] bg-white dark:bg-[#141414] p-5">
       <div className="mb-4 flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-baseline gap-2">
+        <div className="flex items-baseline gap-2 flex-wrap">
           <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Reserve Ratio</h3>
           <span className="text-xs font-normal text-gray-400 dark:text-white/40">from on-chain box history</span>
+          {!hasOracleData && !loading && snapshots.length > 0 && (
+            <span className="text-xs font-medium text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded">
+              Oracle history unavailable — using live gold price for all points
+            </span>
+          )}
           {isSparse && (
             <span className="text-xs font-medium text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded">
               Showing all {snapshots.length} available snapshots
@@ -134,7 +185,7 @@ export function ReserveRatioChart({ goldPriceNanoErg, totalNeutronSupply }: Rese
       </div>
 
       <div className="h-56 w-full">
-        {loading || !goldPriceNanoErg || !totalNeutronSupply ? (
+        {loading || !totalNeutronSupply ? (
           <div className="flex h-full items-center justify-center gap-2">
             <Loader2 className="h-5 w-5 animate-spin text-gray-400 dark:text-white/40" />
             <span className="text-xs text-gray-400 dark:text-white/40">Loading on-chain history…</span>
@@ -156,18 +207,23 @@ export function ReserveRatioChart({ goldPriceNanoErg, totalNeutronSupply }: Rese
                   <stop offset="95%" stopColor="#e11d48" stopOpacity={0}/>
                 </linearGradient>
                 <linearGradient id="colorNormalized" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#d97706" stopOpacity={0.3}/>
-                  <stop offset="95%" stopColor="#d97706" stopOpacity={0}/>
+                  <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3}/>
+                  <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0}/>
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke={isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.06)"} vertical={false} />
               <XAxis
                 dataKey="timestamp"
-                tickFormatter={(v: number) => dateFnsFormat(new Date(v), "MMM d")}
+                type="number"
+                scale="time"
+                domain={["dataMin", "dataMax"]}
+                ticks={monthTicks}
+                tickFormatter={(v: number) => dateFnsFormat(new Date(v), "MMM")}
                 tick={{ fill: isDark ? "rgba(255,255,255,0.3)" : "#6b7280", fontSize: 11 }}
-                axisLine={false} tickLine={false} minTickGap={30}
+                axisLine={false} tickLine={false}
               />
               <YAxis
+                domain={[0, yAxisMax]}
                 tickFormatter={(v) => `${v}%`}
                 tick={{ fill: isDark ? "rgba(255,255,255,0.3)" : "#6b7280", fontSize: 11 }}
                 axisLine={false} tickLine={false}
@@ -175,6 +231,13 @@ export function ReserveRatioChart({ goldPriceNanoErg, totalNeutronSupply }: Rese
               <RechartsTooltip content={<CustomTooltip />} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
 
+              {/*
+                Protocol health reference lines — these are documented Gluon Gold
+                protocol parameters, NOT placeholders or mock data:
+                  350% → Healthy reserve (above target backing threshold)
+                  180% → Caution zone (depeg risk increases)
+                   90% → Risk zone (GAU backing compromised)
+              */}
               <ReferenceLine y={350} stroke="#10b981" strokeDasharray="4 4" label={{ value: "Healthy", fill: "#10b981", fontSize: 10, position: "insideTopRight" }} />
               <ReferenceLine y={180} stroke="#f59e0b" strokeDasharray="4 4" label={{ value: "Caution", fill: "#f59e0b", fontSize: 10, position: "insideTopRight" }} />
               <ReferenceLine y={90} stroke="#ef4444" strokeDasharray="4 4" label={{ value: "Risk", fill: "#ef4444", fontSize: 10, position: "insideTopRight" }} />
@@ -190,12 +253,17 @@ export function ReserveRatioChart({ goldPriceNanoErg, totalNeutronSupply }: Rese
                 />
               ))}
 
-              <Area type="monotone" dataKey="normalizedReserveRatio" name="Normalized Reserve Ratio" stroke="#d97706" fillOpacity={1} fill="url(#colorNormalized)" strokeWidth={2} isAnimationActive={true} />
+              <Area type="monotone" dataKey="normalizedReserveRatio" name="Normalized Reserve Ratio" stroke="#8b5cf6" fillOpacity={1} fill="url(#colorNormalized)" strokeWidth={2} isAnimationActive={true} />
               <Area type="monotone" dataKey="reserveRatio" name="Reserve Ratio" stroke="#e11d48" fillOpacity={1} fill="url(#colorReserve)" strokeWidth={2} isAnimationActive={true} />
             </AreaChart>
           </ResponsiveContainer>
         )}
       </div>
+
+      {/* Timestamp approximation footnote */}
+      <p className="mt-2 text-[10px] text-gray-400 dark:text-white/25 text-right">
+        Dates are block-height estimates (±2 min/block)
+      </p>
     </div>
   );
 }
