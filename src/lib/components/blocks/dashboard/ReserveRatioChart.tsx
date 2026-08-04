@@ -23,6 +23,8 @@ interface ReserveRatioChartProps {
    */
   goldPriceNanoErg: number;
   totalNeutronSupply: number;
+  oracleLoading?: boolean;
+  oracleError?: string | null;
 }
 
 const CustomTooltip = ({ active, payload, label }: TooltipProps<number, string>) => {
@@ -48,7 +50,12 @@ const CustomTooltip = ({ active, payload, label }: TooltipProps<number, string>)
   );
 };
 
-export function ReserveRatioChart({ goldPriceNanoErg, totalNeutronSupply }: ReserveRatioChartProps) {
+export function ReserveRatioChart({
+  goldPriceNanoErg,
+  totalNeutronSupply,
+  oracleLoading,
+  oracleError,
+}: ReserveRatioChartProps) {
   const [range, setRange] = useState<TimeRange>("ALL");
   const { snapshots, loading, error, migrationHeights } = useGluonTransactionHistory();
   const { resolvedTheme } = useTheme();
@@ -56,7 +63,7 @@ export function ReserveRatioChart({ goldPriceNanoErg, totalNeutronSupply }: Rese
   const isDark = resolvedTheme === "dark";
   const isSparse = snapshots.length < SPARSE_THRESHOLD;
 
-  // True when all snapshots lack a historical oracle price (oracle fetch failed)
+  // True when at least one snapshot has a historical oracle price (oracle fetch succeeded)
   const hasOracleData = useMemo(
     () => snapshots.some(s => s.goldPriceNanoErg > 0),
     [snapshots]
@@ -170,6 +177,7 @@ export function ReserveRatioChart({ goldPriceNanoErg, totalNeutronSupply }: Rese
           {(["ALL", "90D", "30D"] as TimeRange[]).map((r) => (
             <button
               key={r}
+              type="button"
               onClick={() => setRange(r)}
               className={[
                 "rounded-md px-2.5 py-0.5 text-xs font-medium transition-colors",
@@ -185,14 +193,14 @@ export function ReserveRatioChart({ goldPriceNanoErg, totalNeutronSupply }: Rese
       </div>
 
       <div className="h-56 w-full">
-        {loading || !totalNeutronSupply ? (
+        {loading || (oracleLoading && !totalNeutronSupply) ? (
           <div className="flex h-full items-center justify-center gap-2">
             <Loader2 className="h-5 w-5 animate-spin text-gray-400 dark:text-white/40" />
             <span className="text-xs text-gray-400 dark:text-white/40">Loading on-chain history…</span>
           </div>
-        ) : error && chartData.length === 0 ? (
+        ) : (error || oracleError) && chartData.length === 0 ? (
           <div className="flex h-full items-center justify-center">
-            <p className="text-xs text-red-400 text-center max-w-xs">{error}</p>
+            <p className="text-xs text-red-400 text-center max-w-xs">{error || oracleError}</p>
           </div>
         ) : chartData.length === 0 ? (
           <div className="flex h-full items-center justify-center">

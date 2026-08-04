@@ -17,7 +17,9 @@ const SPARSE_THRESHOLD = 10;
 interface GaucLeverageChartProps {
   goldPriceNanoErg: number;
   totalNeutronSupply: number;
-  currentLeverage: number;
+  currentLeverage?: number;
+  oracleLoading?: boolean;
+  oracleError?: string | null;
 }
 
 const CustomTooltip = ({ active, payload, label }: TooltipProps<number, string>) => {
@@ -35,7 +37,13 @@ const CustomTooltip = ({ active, payload, label }: TooltipProps<number, string>)
   );
 };
 
-export function GaucLeverageChart({ currentLeverage, goldPriceNanoErg, totalNeutronSupply }: GaucLeverageChartProps) {
+export function GaucLeverageChart({
+  currentLeverage,
+  goldPriceNanoErg,
+  totalNeutronSupply,
+  oracleLoading,
+  oracleError,
+}: GaucLeverageChartProps) {
   const [range, setRange] = useState<TimeRange>("ALL");
   const { snapshots, loading, error, migrationHeights } = useGluonTransactionHistory();
   const { resolvedTheme } = useTheme();
@@ -43,8 +51,14 @@ export function GaucLeverageChart({ currentLeverage, goldPriceNanoErg, totalNeut
   const isDark = resolvedTheme === "dark";
   const isSparse = snapshots.length < SPARSE_THRESHOLD;
 
+  // True when at least one snapshot has a historical oracle price (oracle fetch succeeded)
+  const hasOracleData = useMemo(
+    () => snapshots.some(s => s.goldPriceNanoErg > 0),
+    [snapshots]
+  );
+
   const chartData = useMemo(() => {
-    if (!goldPriceNanoErg || !totalNeutronSupply) return [];
+    if (!totalNeutronSupply) return [];
 
     let filtered = snapshots;
     if (!isSparse && range !== "ALL") {
@@ -55,14 +69,22 @@ export function GaucLeverageChart({ currentLeverage, goldPriceNanoErg, totalNeut
 
     const finalData = filtered.map(s => {
       const circNeutronsRaw = totalNeutronSupply - s.neutronAmount;
-      if (circNeutronsRaw <= 0 || goldPriceNanoErg <= 0) return null;
+      const effectiveGoldPrice = s.goldPriceNanoErg > 0 ? s.goldPriceNanoErg : goldPriceNanoErg;
+      if (circNeutronsRaw <= 0 || effectiveGoldPrice <= 0) return null;
 
-      const tvlErg = s.ergValue;
+      // Use fissioned TVL (minus 1,000,000 nanoERG) matching SDK's getTVL() and getErgFissioned()
+      const tvlNano = s.ergValue * 1e9;
+      const tvlFissioned = tvlNano - 1000000;
+      if (Math.floor(tvlFissioned) <= 0) return null;
       
       // Step 2: Exact normalized reserve ratio logic from Gluon SDK (gluon.getReserveRatio)
       const qstar = BigInt(660000000);
-      const rightHandMinVal = (BigInt(Math.floor(circNeutronsRaw)) * BigInt(goldPriceNanoErg)) / BigInt(Math.floor(tvlErg));
+      const pricePerGram = effectiveGoldPrice / 1000;
+      if (Math.floor(pricePerGram) <= 0) return null;
+
+      const rightHandMinVal = (BigInt(Math.floor(circNeutronsRaw)) * BigInt(Math.floor(pricePerGram))) / BigInt(Math.floor(tvlFissioned));
       const fusionRatio = rightHandMinVal < qstar ? rightHandMinVal : qstar;
+      if (fusionRatio <= BigInt(0)) return null;
       const normalizedReserveRatio = (100 * 1e9) / Number(fusionRatio);
 
       // Step 3: gaucLeverage — exactly GluonStats.tsx line 130:
@@ -71,13 +93,13 @@ export function GaucLeverageChart({ currentLeverage, goldPriceNanoErg, totalNeut
 
       const leverage = Math.round(-(100 / (100 - normalizedReserveRatio)) * 100) / 100;
 
-      if (!isFinite(leverage) || Math.abs(leverage) > 100) return null;
+      if (!Number.isFinite(leverage) || Math.abs(leverage) > 100) return null;
 
       return { timestamp: s.timestamp, leverage };
     }).filter((p): p is { timestamp: number; leverage: number } => p !== null);
     
     return finalData;
-  }, [snapshots, range, isSparse, goldPriceNanoErg, totalNeutronSupply, currentLeverage]);
+  }, [snapshots, range, isSparse, goldPriceNanoErg, totalNeutronSupply]);
 
   // Fix 1: One tick per calendar month — placed at the first data point of
   // each month. Prevents repeated "Aug Aug Aug" labels from Recharts auto-ticking.
@@ -108,12 +130,17 @@ export function GaucLeverageChart({ currentLeverage, goldPriceNanoErg, totalNeut
   return (
     <div className="mt-6 rounded-xl border border-gray-200 dark:border-white/[0.07] bg-white dark:bg-[#141414] p-5">
       <div className="mb-4 flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-baseline gap-2">
+        <div className="flex items-baseline gap-2 flex-wrap">
           <h3 className="text-sm font-semibold text-gray-900 dark:text-white">GAUC Leverage</h3>
-          {currentLeverage !== undefined && (
+          {currentLeverage !== undefined && Number.isFinite(currentLeverage) && (
             <span className="text-xs font-semibold text-amber-400">Live: {currentLeverage.toFixed(2)}x</span>
           )}
           <span className="text-xs font-normal text-gray-400 dark:text-white/40">from on-chain history</span>
+          {!hasOracleData && !loading && snapshots.length > 0 && (
+            <span className="text-xs font-medium text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded">
+              Oracle history unavailable — using live gold price for all points
+            </span>
+          )}
           {isSparse && (
             <span className="text-xs font-medium text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded">
               Showing all {snapshots.length} available snapshots
@@ -125,6 +152,7 @@ export function GaucLeverageChart({ currentLeverage, goldPriceNanoErg, totalNeut
           {(["ALL", "90D", "30D"] as TimeRange[]).map((r) => (
             <button
               key={r}
+              type="button"
               onClick={() => setRange(r)}
               className={[
                 "rounded-md px-2.5 py-0.5 text-xs font-medium transition-colors",
@@ -140,14 +168,14 @@ export function GaucLeverageChart({ currentLeverage, goldPriceNanoErg, totalNeut
       </div>
 
       <div className="h-56 w-full">
-        {loading || !goldPriceNanoErg || !totalNeutronSupply ? (
+        {loading || (oracleLoading && !totalNeutronSupply) ? (
           <div className="flex h-full items-center justify-center gap-2">
             <Loader2 className="h-5 w-5 animate-spin text-gray-400 dark:text-white/40" />
             <span className="text-xs text-gray-400 dark:text-white/40">Loading on-chain history…</span>
           </div>
-        ) : error && chartData.length === 0 ? (
+        ) : (error || oracleError) && chartData.length === 0 ? (
           <div className="flex h-full items-center justify-center">
-            <p className="text-xs text-red-400 text-center">{error}</p>
+            <p className="text-xs text-red-400 text-center">{error || oracleError}</p>
           </div>
         ) : chartData.length === 0 ? (
           <div className="flex h-full items-center justify-center">
@@ -174,7 +202,7 @@ export function GaucLeverageChart({ currentLeverage, goldPriceNanoErg, totalNeut
               />
               <RechartsTooltip content={<CustomTooltip />} />
 
-              {currentLeverage !== undefined && (
+              {currentLeverage !== undefined && Number.isFinite(currentLeverage) && (
                 <ReferenceLine
                   y={currentLeverage}
                   stroke="#f59e0b"

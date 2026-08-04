@@ -20,10 +20,14 @@ interface OracleData {
 
 export default function ReactorDashboard() {
   const [oracle, setOracle] = useState<OracleData | null>(null);
+  const [oracleLoading, setOracleLoading] = useState(true);
+  const [oracleError, setOracleError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     async function fetchOracle() {
+      setOracleLoading(true);
+      setOracleError(null);
       try {
         const sdk = await import("gluon-ergo-sdk");
         const gluon = new sdk.Gluon();
@@ -49,9 +53,14 @@ export default function ReactorDashboard() {
             totalNeutronSupply,
             currentLeverage,
           });
+          setOracleLoading(false);
         }
-      } catch (err) {
+      } catch (err: any) {
         console.warn("[ReactorDashboard] Oracle fetch failed:", err);
+        if (!cancelled) {
+          setOracleError(err?.message || "Failed to fetch live oracle data");
+          setOracleLoading(false);
+        }
       }
     }
     fetchOracle();
@@ -80,6 +89,8 @@ export default function ReactorDashboard() {
             <ReserveRatioChart
               goldPriceNanoErg={oracle?.goldPriceNanoErg ?? 0}
               totalNeutronSupply={oracle?.totalNeutronSupply ?? 0}
+              oracleLoading={oracleLoading}
+              oracleError={oracleError}
             />
           </motion.div>
 
@@ -93,9 +104,11 @@ export default function ReactorDashboard() {
 
           <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.6, duration: 0.5 }}>
             <GaucLeverageChart
-              currentLeverage={oracle?.currentLeverage ?? 0}
+              currentLeverage={oracle?.currentLeverage}
               goldPriceNanoErg={oracle?.goldPriceNanoErg ?? 0}
               totalNeutronSupply={oracle?.totalNeutronSupply ?? 0}
+              oracleLoading={oracleLoading}
+              oracleError={oracleError}
             />
           </motion.div>
 
