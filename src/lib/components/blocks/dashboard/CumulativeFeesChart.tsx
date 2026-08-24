@@ -19,22 +19,22 @@ import { useGluonFeeBreakdown } from "@/lib/hooks/useGluonFeeBreakdown";
 import { useTheme } from "next-themes";
 
 /**
- * CumulativeFeesChart
+ * @file CumulativeFeesChart.tsx
+ * @description Displays cumulative protocol fees split into categories:
+ *   - Fission dev fee + dilution value     (exact)       ── indigo solid area
+ *   - Fusion dev fee + dilution value      (exact)       ── amber solid area
+ *   - Transmutation (N→P) dilution + dev   (estimate †)  ── purple dashed line
+ *   - Transmutation (P→N) dilution + dev   (estimate †)  ── pink dashed line
+ *   - Oracle fee on transmutation txs      (exact*)      ── teal solid area
  *
- * Displays cumulative protocol fees split into four categories:
- *   - Fission dev fee + dilution value  (exact)      ── indigo solid area
- *   - Fusion dev fee + dilution value   (exact)      ── amber solid area
- *   - Oracle fee on beta-decay txs      (exact*)     ── teal solid area
- *   - Beta-decay dilution value         (estimate †) ── purple dashed line
- *
- * The first three are stacked solid areas. The beta-decay dilution is a
- * separate dashed line (not stacked), clearly marked as an estimate, and
- * can be toggled off by the user.
+ * Fission, fusion, and oracle are stacked solid areas. The two transmutation
+ * directions are separate dashed lines (not stacked), clearly marked as estimates,
+ * and can be toggled off together by the user.
  *
  * Precision notes:
  *   - Fission/fusion: exact register diff + algebraic token-shortfall × price
  *   - Oracle: exact given token price at each block (SDK: 0.1% × ERG volume)
- *   - Beta-decay dilution †: varPhiBeta rate × per-tx volume (rate-based estimate)
+ *   - Transmutation dilution †: varPhiBeta rate × per-tx volume (rate-based estimate)
  *
  * Chart conventions match GaucYieldChart.tsx and ReserveRatioChart.tsx:
  *   - Card wrapper, time-range buttons (ALL/90D/30D)
@@ -54,10 +54,14 @@ const CustomTooltip = ({ active, payload, label }: TooltipProps<number, string>)
   const get = (key: string) => payload.find((p) => p.dataKey === key)?.value as number | undefined;
   const fission = get("fission");
   const fusion = get("fusion");
+  const transmuteNP = get("transmuteNeutronToProton");
+  const transmutePN = get("transmuteProtonToNeutron");
   const oracle = get("oracle");
-  const betaDecay = get("betaDecay");
   const exactTotal = (fission ?? 0) + (fusion ?? 0) + (oracle ?? 0);
-  const displayedTotal = exactTotal + (typeof betaDecay === "number" ? betaDecay : 0);
+  const displayedTotal =
+    exactTotal +
+    (typeof transmuteNP === "number" ? transmuteNP : 0) +
+    (typeof transmutePN === "number" ? transmutePN : 0);
 
   const dateStr = dateFnsFormat(new Date(label as number), "MMM d, yyyy");
 
@@ -74,21 +78,26 @@ const CustomTooltip = ({ active, payload, label }: TooltipProps<number, string>)
           Fusion: {fusion.toFixed(4)} ERG
         </p>
       )}
+      {typeof transmuteNP === "number" && (
+        <p className="text-purple-400">
+          Transmutation (N→P) †: {transmuteNP.toFixed(4)} ERG
+        </p>
+      )}
+      {typeof transmutePN === "number" && (
+        <p className="text-pink-400">
+          Transmutation (P→N) †: {transmutePN.toFixed(4)} ERG
+        </p>
+      )}
       {typeof oracle === "number" && (
         <p className="text-teal-500 dark:text-teal-400">
           Oracle: {oracle.toFixed(4)} ERG
-        </p>
-      )}
-      {typeof betaDecay === "number" && (
-        <p className="text-purple-400">
-          β Dilution †: {betaDecay.toFixed(4)} ERG
         </p>
       )}
       <p className="mt-1 pt-1 border-t border-gray-100 dark:border-white/10 font-semibold text-gray-900 dark:text-white">
         Total: {displayedTotal.toFixed(4)} ERG
       </p>
       <p className="mt-1 text-[10px] text-gray-400 dark:text-white/25">
-        † Beta-decay dilution is estimated
+        † Transmutation fee is estimated
       </p>
     </div>
   );
@@ -98,7 +107,7 @@ const CustomTooltip = ({ active, payload, label }: TooltipProps<number, string>)
 
 export function CumulativeFeesChart() {
   const [range, setRange] = useState<TimeRange>("ALL");
-  const [showBetaEstimate, setShowBetaEstimate] = useState(true);
+  const [showTransmuteEstimate, setShowTransmuteEstimate] = useState(true);
   const { points, loading, error } = useGluonFeeBreakdown();
   const { resolvedTheme } = useTheme();
 
@@ -137,13 +146,14 @@ export function CumulativeFeesChart() {
   const yAxisMax = useMemo(() => {
     if (chartData.length === 0) return 1;
     const stackedMax = Math.max(...chartData.map((d) => d.fission + d.fusion + d.oracle));
-    const betaMax = showBetaEstimate ? Math.max(...chartData.map((d) => d.betaDecay)) : 0;
-    const maxTotal = Math.max(stackedMax, betaMax);
+    const npMax = showTransmuteEstimate ? Math.max(...chartData.map((d) => d.transmuteNeutronToProton)) : 0;
+    const pnMax = showTransmuteEstimate ? Math.max(...chartData.map((d) => d.transmuteProtonToNeutron)) : 0;
+    const maxTotal = Math.max(stackedMax, npMax, pnMax);
     if (maxTotal <= 0) return 1;
     // Round up to a clean value
     const magnitude = Math.pow(10, Math.floor(Math.log10(maxTotal)));
     return Math.ceil(maxTotal / magnitude) * magnitude;
-  }, [chartData, showBetaEstimate]);
+  }, [chartData, showTransmuteEstimate]);
 
   // ── Last point for header summary ──────────────────────────────────────
   const lastPoint = chartData.length > 0 ? chartData[chartData.length - 1] : null;
@@ -159,7 +169,7 @@ export function CumulativeFeesChart() {
               Protocol Fee Accumulation
             </h3>
             <span className="text-xs font-normal text-gray-400 dark:text-white/40">
-              exact fees only · β dilution is estimated †
+              exact fees only · transmutation fee is estimated †
             </span>
             {isSparse && (
               <span className="text-xs font-medium text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded">
@@ -180,22 +190,35 @@ export function CumulativeFeesChart() {
                 value={lastPoint.fusion}
                 colorClass="text-amber-500 bg-amber-500/10 border-amber-500/20"
               />
+              {showTransmuteEstimate && (
+                <>
+                  <StatPill
+                    label="Transmutation (N→P)"
+                    value={lastPoint.transmuteNeutronToProton}
+                    colorClass="text-purple-400 bg-purple-500/10 border-purple-500/20"
+                    isEstimate
+                  />
+                  <StatPill
+                    label="Transmutation (P→N)"
+                    value={lastPoint.transmuteProtonToNeutron}
+                    colorClass="text-pink-400 bg-pink-500/10 border-pink-500/20"
+                    isEstimate
+                  />
+                </>
+              )}
               <StatPill
                 label="Oracle"
                 value={lastPoint.oracle}
                 colorClass="text-teal-500 bg-teal-500/10 border-teal-500/20"
               />
-              {showBetaEstimate && (
-                <StatPill
-                  label="β Dilution †"
-                  value={lastPoint.betaDecay}
-                  colorClass="text-purple-400 bg-purple-500/10 border-purple-500/20"
-                  isEstimate
-                />
-              )}
               <StatPill
                 label="Total"
-                value={lastPoint.total - (showBetaEstimate ? 0 : lastPoint.estimated)}
+                value={
+                  lastPoint.total -
+                  (showTransmuteEstimate
+                    ? 0
+                    : lastPoint.estimatedNeutronToProton + lastPoint.estimatedProtonToNeutron)
+                }
                 colorClass="text-gray-900 dark:text-white bg-gray-100 dark:bg-white/5 border-gray-200 dark:border-white/10"
                 bold
               />
@@ -205,18 +228,18 @@ export function CumulativeFeesChart() {
 
         {/* Controls */}
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Beta-decay estimate toggle */}
+          {/* Transmutation estimate toggle */}
           <button
             type="button"
-            onClick={() => setShowBetaEstimate((v) => !v)}
+            onClick={() => setShowTransmuteEstimate((v) => !v)}
             className={[
               "rounded-md px-2.5 py-0.5 text-xs font-medium transition-colors border",
-              showBetaEstimate
+              showTransmuteEstimate
                 ? "bg-purple-500/10 text-purple-400 border-purple-500/20"
                 : "text-gray-400 dark:text-white/40 border-gray-200 dark:border-white/10 hover:text-gray-600 dark:hover:text-white/60",
             ].join(" ")}
           >
-            {showBetaEstimate ? "Hide" : "Show"} β estimate
+            {showTransmuteEstimate ? "Hide" : "Show"} transmutation estimate
           </button>
 
           {/* Time range */}
@@ -313,7 +336,8 @@ export function CumulativeFeesChart() {
               <Legend
                 wrapperStyle={{ fontSize: 11 }}
                 formatter={(value: string) => {
-                  if (value === "betaDecay") return "β Dilution † (est.)";
+                  if (value === "transmuteNeutronToProton") return "Transmutation (N→P) † (est.)";
+                  if (value === "transmuteProtonToNeutron") return "Transmutation (P→N) † (est.)";
                   return value.charAt(0).toUpperCase() + value.slice(1);
                 }}
               />
@@ -353,19 +377,32 @@ export function CumulativeFeesChart() {
                 isAnimationActive={true}
               />
 
-              {/* Dashed line — beta-decay dilution estimate (not stacked, togglable) */}
-              {showBetaEstimate && (
-                <Line
-                  type="monotone"
-                  dataKey="betaDecay"
-                  name="betaDecay"
-                  stroke="#a78bfa"
-                  strokeWidth={1.5}
-                  strokeDasharray="5 4"
-                  dot={false}
-                  isAnimationActive={true}
-                  legendType="plainline"
-                />
+              {/* Dashed lines — transmutation dilution estimates (not stacked, togglable) */}
+              {showTransmuteEstimate && (
+                <>
+                  <Line
+                    type="monotone"
+                    dataKey="transmuteNeutronToProton"
+                    name="transmuteNeutronToProton"
+                    stroke="#a78bfa"
+                    strokeWidth={1.5}
+                    strokeDasharray="5 4"
+                    dot={false}
+                    isAnimationActive={true}
+                    legendType="plainline"
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="transmuteProtonToNeutron"
+                    name="transmuteProtonToNeutron"
+                    stroke="#f472b6"
+                    strokeWidth={1.5}
+                    strokeDasharray="5 4"
+                    dot={false}
+                    isAnimationActive={true}
+                    legendType="plainline"
+                  />
+                </>
               )}
             </ComposedChart>
           </ResponsiveContainer>
@@ -375,7 +412,7 @@ export function CumulativeFeesChart() {
       {/* Footnote row */}
       <div className="mt-2 flex justify-between items-end flex-wrap gap-1">
         <p className="text-[10px] text-gray-400 dark:text-white/25">
-          † Beta-decay dilution: rate-based estimate (varPhiBeta × transmuted vol). All other lines are exact.
+          † Transmutation fee: rate-based estimate (varPhiBeta × transmuted vol). All other lines are exact.
           Oracle fees exact given token price at each block.
         </p>
         <p className="text-[10px] text-gray-400 dark:text-white/25 text-right">

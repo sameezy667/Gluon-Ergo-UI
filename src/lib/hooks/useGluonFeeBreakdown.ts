@@ -74,7 +74,7 @@ const warnDebug = (...args: unknown[]) => {
 const EXPLORER_BASE = "https://api.ergoplatform.com/api/v1";
 const PAGE_SIZE = 100;
 const BLOCK_TIME_MS = 120_000;
-const CACHE_KEY = "gluon_fee_breakdown_v7";
+const CACHE_KEY = "gluon_fee_breakdown_v8";
 const CACHE_TTL_MS = 30 * 60 * 1000;
 
 const NEUTRON_ID = "886b7721bef42f60c6317d37d8752da8aca01898cae7dae61808c4a14225edc8";
@@ -86,16 +86,21 @@ const ORACLE_POOL_NFT = "3c45f29a5165b030fdb5eaf5d81f8108f9d8f507b31487dd51f4ae0
 // missing register silently shifts every subsequent index).
 const REQUIRED_REGISTERS = ["R4", "R5", "R6", "R7", "R8", "R9"];
 
-// Tolerance for treating a box's ERG value as "unchanged" across a beta-decay
+// Tolerance for treating a box's ERG value as "unchanged" across a transmutation
 // transition (miner-fee dust, rounding). 0.002 ERG.
 const BETA_DECAY_FLAT_TOLERANCE_NANOERG = 2_000_000;
 // Fission/fusion classification is decided by SIGN (which token amounts
 // decreased vs increased), not magnitude — a fission of 0.0003 ERG is just as
 // real as one of 300 ERG. This only exists to keep fission/fusion from ever
-// overlapping with the beta-decay "flat" zone at dValue === 0 exactly.
+// overlapping with the transmutation "flat" zone at dValue === 0 exactly.
 const FISSION_FUSION_MIN_VALUE_NANOERG = 1;
 
-export type FeeCategory = "fission" | "fusion" | "betaDecay" | "unknown";
+export type FeeCategory =
+  | "fission"
+  | "fusion"
+  | "transmuteNeutronToProton"
+  | "transmuteProtonToNeutron"
+  | "unknown";
 
 export interface TransitionFee {
   height: number;
@@ -104,11 +109,11 @@ export interface TransitionFee {
   category: FeeCategory;
   devFeeErg: number;
   dilutionValueErg: number;
-  /** Only nonzero for betaDecay transitions. Kept as its own bucket per Bruno's request. */
+  /** Only nonzero for transmutation transitions. Kept as its own bucket per Bruno's request. */
   oracleFeeErg: number;
   /** devFeeErg + dilutionValueErg (oracle fee is NOT included — it's its own bucket). */
   totalFeeErg: number;
-  /** True only for the betaDecay dilutionValueErg (rate × volume estimate, not an exact shortfall). */
+  /** True only for the transmutation dilutionValueErg (rate × volume estimate, not an exact shortfall). */
   isEstimate: boolean;
   /** Raw box-state deltas that drove classification, exposed for debugging —
    * especially for `category === "unknown"` rows, so patterns can be
@@ -123,8 +128,12 @@ export interface CumulativeFeePoint {
   timestamp: number;
   fission: number;
   fusion: number;
-  betaDecay: number;
+  transmuteNeutronToProton: number;
+  transmuteProtonToNeutron: number;
   oracle: number;
+  estimatedNeutronToProton: number;
+  estimatedProtonToNeutron: number;
+  betaDecay: number;
   estimated: number;
   total: number;
 }
@@ -458,7 +467,7 @@ async function computeTransitionFee(
 
   const isFlat = Math.abs(dValue) <= BETA_DECAY_FLAT_TOLERANCE_NANOERG;
   if (isFlat && dNeutron > 0 && dProton <= 0) {
-    // BETA DECAY: neutron -> proton (user sends neutrons in, gets protons out).
+    // TRANSMUTATION: neutron -> proton (user sends neutrons in, gets protons out).
     // dProton is allowed to be exactly 0 on a dust-sized decay where the
     // output proton amount rounds down to nothing.
     const neutronPrice = await prevGluonBox.neutronPrice(pegOracle);
@@ -472,7 +481,7 @@ async function computeTransitionFee(
 
     return {
       ...base,
-      category: "betaDecay",
+      category: "transmuteNeutronToProton",
       devFeeErg,
       dilutionValueErg: dilutionNanoErg / 1e9,
       oracleFeeErg: feeAmounts.oracleFee / 1e9,
@@ -482,7 +491,7 @@ async function computeTransitionFee(
   }
 
   if (isFlat && dNeutron <= 0 && dProton > 0) {
-    // BETA DECAY: proton -> neutron (user sends protons in, gets neutrons out).
+    // TRANSMUTATION: proton -> neutron (user sends protons in, gets neutrons out).
     // dNeutron is allowed to be exactly 0 for the same dust-rounding reason.
     const protonPrice = await prevGluonBox.protonPrice(pegOracle);
     const transmutedVolNanoErg = (protonPrice * BigInt(Math.trunc(dProton))) / BigInt(1e9);
@@ -495,7 +504,7 @@ async function computeTransitionFee(
 
     return {
       ...base,
-      category: "betaDecay",
+      category: "transmuteProtonToNeutron",
       devFeeErg,
       dilutionValueErg: dilutionNanoErg / 1e9,
       oracleFeeErg: feeAmounts.oracleFee / 1e9,
@@ -694,16 +703,23 @@ export function useGluonFeeBreakdown(): UseGluonFeeBreakdownResult {
         const newPoints: CumulativeFeePoint[] = [];
         let cFission = 0;
         let cFusion = 0;
-        let cBetaDecay = 0;
+        let cTransmuteNP = 0;
+        let cTransmutePN = 0;
         let cOracle = 0;
         let cUnknown = 0;
-        let cEstimated = 0;
+        let cEstimatedNP = 0;
+        let cEstimatedPN = 0;
         for (const t of newTransitions) {
-          if (t.category === "fission") cFission += t.totalFeeErg;
-          else if (t.category === "fusion") cFusion += t.totalFeeErg;
-          else if (t.category === "betaDecay") {
-            cBetaDecay += t.totalFeeErg;
-            cEstimated += t.dilutionValueErg;
+          if (t.category === "fission") {
+            cFission += t.totalFeeErg;
+          } else if (t.category === "fusion") {
+            cFusion += t.totalFeeErg;
+          } else if (t.category === "transmuteNeutronToProton") {
+            cTransmuteNP += t.totalFeeErg;
+            cEstimatedNP += t.dilutionValueErg;
+          } else if (t.category === "transmuteProtonToNeutron") {
+            cTransmutePN += t.totalFeeErg;
+            cEstimatedPN += t.dilutionValueErg;
           } else if (t.category === "unknown") {
             cUnknown += t.devFeeErg;
           }
@@ -713,10 +729,14 @@ export function useGluonFeeBreakdown(): UseGluonFeeBreakdownResult {
             timestamp: t.timestamp,
             fission: cFission,
             fusion: cFusion,
-            betaDecay: cBetaDecay,
+            transmuteNeutronToProton: cTransmuteNP,
+            transmuteProtonToNeutron: cTransmutePN,
             oracle: cOracle,
-            estimated: cEstimated,
-            total: cFission + cFusion + cBetaDecay + cOracle + cUnknown,
+            estimatedNeutronToProton: cEstimatedNP,
+            estimatedProtonToNeutron: cEstimatedPN,
+            betaDecay: cTransmuteNP + cTransmutePN,
+            estimated: cEstimatedNP + cEstimatedPN,
+            total: cFission + cFusion + cTransmuteNP + cTransmutePN + cOracle + cUnknown,
           });
         }
 
@@ -728,7 +748,7 @@ export function useGluonFeeBreakdown(): UseGluonFeeBreakdownResult {
           `Skipped (contract migration boundary): ${skippedMigration}`,
           `Skipped (missing registers): ${skippedMissingRegisters}`,
           `Unclassified transitions (devFee only, no dilution): ${unclassified}`,
-          "Beta-decay dilution value is a rate-based estimate (varPhiBeta × transmuted volume), not an exact token-shortfall like Fission/Fusion.",
+          "Transmutation dilution value is a rate-based estimate (varPhiBeta × transmuted volume), not an exact token-shortfall like Fission/Fusion.",
         ];
 
         const entry: CacheEntry = {
