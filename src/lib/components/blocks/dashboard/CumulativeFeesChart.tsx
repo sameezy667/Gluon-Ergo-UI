@@ -51,48 +51,50 @@ const SPARSE_THRESHOLD = 10;
 const CustomTooltip = ({ active, payload, label }: TooltipProps<number, string>) => {
   if (!active || !payload?.length) return null;
 
-  const get = (key: string) => payload.find((p) => p.dataKey === key)?.value as number | undefined;
-  const fission = get("fission");
-  const fusion = get("fusion");
-  const transmuteNP = get("transmuteNeutronToProton");
-  const transmutePN = get("transmuteProtonToNeutron");
-  const oracle = get("oracle");
-  const exactTotal = (fission ?? 0) + (fusion ?? 0) + (oracle ?? 0);
-  const displayedTotal =
-    exactTotal +
-    (typeof transmuteNP === "number" ? transmuteNP : 0) +
-    (typeof transmutePN === "number" ? transmutePN : 0);
+  const row = payload[0]?.payload as {
+    fission?: number;
+    fusion?: number;
+    transmuteNeutronToProton?: number;
+    transmuteProtonToNeutron?: number;
+    oracle?: number;
+  } | undefined;
+
+  const get = (key: string) => {
+    const fromPayload = payload.find((p) => p.dataKey === key)?.value;
+    if (typeof fromPayload === "number") return fromPayload;
+    if (row && typeof (row as Record<string, number | undefined>)[key] === "number") {
+      return (row as Record<string, number | undefined>)[key];
+    }
+    return undefined;
+  };
+
+  const fission = get("fission") ?? 0;
+  const fusion = get("fusion") ?? 0;
+  const transmuteNP = get("transmuteNeutronToProton") ?? 0;
+  const transmutePN = get("transmuteProtonToNeutron") ?? 0;
+  const oracle = get("oracle") ?? 0;
+  const displayedTotal = fission + fusion + transmuteNP + transmutePN + oracle;
 
   const dateStr = dateFnsFormat(new Date(label as number), "MMM d, yyyy");
 
   return (
     <div className="rounded-lg border border-gray-200 dark:border-white/10 bg-white dark:bg-[#1e1e1e] px-3 py-2 text-xs shadow-md dark:shadow-none min-w-[200px]">
       <p className="mb-2 text-gray-500 dark:text-white/40">{dateStr}</p>
-      {typeof fission === "number" && (
-        <p className="text-indigo-500 dark:text-indigo-400">
-          Fission: {fission.toFixed(4)} ERG
-        </p>
-      )}
-      {typeof fusion === "number" && (
-        <p className="text-amber-500 dark:text-amber-400">
-          Fusion: {fusion.toFixed(4)} ERG
-        </p>
-      )}
-      {typeof transmuteNP === "number" && (
-        <p className="text-purple-400">
-          Transmutation (N→P) †: {transmuteNP.toFixed(4)} ERG
-        </p>
-      )}
-      {typeof transmutePN === "number" && (
-        <p className="text-pink-400">
-          Transmutation (P→N) †: {transmutePN.toFixed(4)} ERG
-        </p>
-      )}
-      {typeof oracle === "number" && (
-        <p className="text-teal-500 dark:text-teal-400">
-          Oracle: {oracle.toFixed(4)} ERG
-        </p>
-      )}
+      <p className="text-indigo-500 dark:text-indigo-400">
+        Fission: {fission.toFixed(4)} ERG
+      </p>
+      <p className="text-amber-500 dark:text-amber-400">
+        Fusion: {fusion.toFixed(4)} ERG
+      </p>
+      <p className="text-purple-400">
+        Transmutation (N→P) †: {transmuteNP.toFixed(4)} ERG
+      </p>
+      <p className="text-pink-400">
+        Transmutation (P→N) †: {transmutePN.toFixed(4)} ERG
+      </p>
+      <p className="text-teal-500 dark:text-teal-400">
+        Oracle: {oracle.toFixed(4)} ERG
+      </p>
       <p className="mt-1 pt-1 border-t border-gray-100 dark:border-white/10 font-semibold text-gray-900 dark:text-white">
         Total: {displayedTotal.toFixed(4)} ERG
       </p>
@@ -162,8 +164,9 @@ export function CumulativeFeesChart() {
   return (
     <div className="mt-6 rounded-xl border border-gray-200 dark:border-white/[0.07] bg-white dark:bg-[#141414] p-5">
       {/* Header row */}
-      <div className="mb-4 flex items-center justify-between flex-wrap gap-3">
-        <div className="flex flex-col gap-1">
+      <div className="mb-4 flex items-start justify-between flex-wrap gap-3">
+        {/* Left group */}
+        <div className="flex flex-col gap-2 flex-1">
           <div className="flex items-baseline gap-2 flex-wrap">
             <h3 className="text-sm font-semibold text-gray-900 dark:text-white">
               Protocol Fee Accumulation
@@ -179,7 +182,7 @@ export function CumulativeFeesChart() {
           </div>
           {/* Running totals badge row */}
           {lastPoint && !loading && (
-            <div className="flex flex-wrap gap-2 mt-1">
+            <div className="flex items-center flex-wrap gap-2 mt-0.5">
               <StatPill
                 label="Fission"
                 value={lastPoint.fission}
@@ -222,44 +225,41 @@ export function CumulativeFeesChart() {
                 colorClass="text-gray-900 dark:text-white bg-gray-100 dark:bg-white/5 border-gray-200 dark:border-white/10"
                 bold
               />
+
+              {/* Transmutation estimate toggle */}
+              <button
+                type="button"
+                onClick={() => setShowTransmuteEstimate((v) => !v)}
+                className={[
+                  "rounded-md px-2.5 py-0.5 text-xs font-medium transition-colors border",
+                  showTransmuteEstimate
+                    ? "bg-purple-500/10 text-purple-400 border-purple-500/20"
+                    : "text-gray-400 dark:text-white/40 border-gray-200 dark:border-white/10 hover:text-gray-600 dark:hover:text-white/60",
+                ].join(" ")}
+              >
+                {showTransmuteEstimate ? "Hide" : "Show"} transmutation estimate
+              </button>
             </div>
           )}
         </div>
 
-        {/* Controls */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* Transmutation estimate toggle */}
-          <button
-            type="button"
-            onClick={() => setShowTransmuteEstimate((v) => !v)}
-            className={[
-              "rounded-md px-2.5 py-0.5 text-xs font-medium transition-colors border",
-              showTransmuteEstimate
-                ? "bg-purple-500/10 text-purple-400 border-purple-500/20"
-                : "text-gray-400 dark:text-white/40 border-gray-200 dark:border-white/10 hover:text-gray-600 dark:hover:text-white/60",
-            ].join(" ")}
-          >
-            {showTransmuteEstimate ? "Hide" : "Show"} transmutation estimate
-          </button>
-
-          {/* Time range */}
-          <div className="flex rounded-lg bg-gray-100 dark:bg-white/5 p-0.5">
-            {(["ALL", "90D", "30D"] as TimeRange[]).map((r) => (
-              <button
-                key={r}
-                type="button"
-                onClick={() => setRange(r)}
-                className={[
-                  "rounded-md px-2.5 py-0.5 text-xs font-medium transition-colors",
-                  (isSparse ? r === "ALL" : range === r)
-                    ? "bg-gray-200 dark:bg-white/10 text-gray-900 dark:text-white"
-                    : "text-gray-400 dark:text-white/40 hover:text-gray-600 dark:hover:text-white/60",
-                ].join(" ")}
-              >
-                {r}
-              </button>
-            ))}
-          </div>
+        {/* Right side: Time range toggle */}
+        <div className="flex rounded-lg bg-gray-100 dark:bg-white/5 p-0.5 self-start">
+          {(["ALL", "90D", "30D"] as TimeRange[]).map((r) => (
+            <button
+              key={r}
+              type="button"
+              onClick={() => setRange(r)}
+              className={[
+                "rounded-md px-2.5 py-0.5 text-xs font-medium transition-colors",
+                (isSparse ? r === "ALL" : range === r)
+                  ? "bg-gray-200 dark:bg-white/10 text-gray-900 dark:text-white"
+                  : "text-gray-400 dark:text-white/40 hover:text-gray-600 dark:hover:text-white/60",
+              ].join(" ")}
+            >
+              {r}
+            </button>
+          ))}
         </div>
       </div>
 
