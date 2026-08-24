@@ -74,7 +74,7 @@ const warnDebug = (...args: unknown[]) => {
 const EXPLORER_BASE = "https://api.ergoplatform.com/api/v1";
 const PAGE_SIZE = 100;
 const BLOCK_TIME_MS = 120_000;
-const CACHE_KEY = "gluon_fee_breakdown_v8";
+const CACHE_KEY = "gluon_fee_breakdown_v9";
 const CACHE_TTL_MS = 30 * 60 * 1000;
 
 const NEUTRON_ID = "886b7721bef42f60c6317d37d8752da8aca01898cae7dae61808c4a14225edc8";
@@ -115,6 +115,8 @@ export interface TransitionFee {
   totalFeeErg: number;
   /** True only for the transmutation dilutionValueErg (rate × volume estimate, not an exact shortfall). */
   isEstimate: boolean;
+  /** True when oracle price history has no sample near this transition height (price <= 0). */
+  priceUnavailable?: boolean;
   /** Raw box-state deltas that drove classification, exposed for debugging —
    * especially for `category === "unknown"` rows, so patterns can be
    * inspected in bulk instead of digging through console.warn calls. */
@@ -372,7 +374,6 @@ async function computeTransitionFee(
 
   const prevGluonBox: GluonBoxType = new sdkMod.GluonBox(adaptToNodeBox(prevRaw));
   const currGluonBox: GluonBoxType = new sdkMod.GluonBox(adaptToNodeBox(currRaw));
-  const pegOracle = makePegOracleLike(goldPriceAtPrevHeight);
 
   const dValue = currRaw.value - prevRaw.value;
   const nPrev = prevRaw.assets.find((a) => a.tokenId === NEUTRON_ID)?.amount ?? 0;
@@ -396,7 +397,45 @@ async function computeTransitionFee(
     rawDeltaProton: dProton,
   };
 
-  if (dValue >= FISSION_FUSION_MIN_VALUE_NANOERG && dNeutron <= 0 && dProton <= 0) {
+  const isFission = dValue >= FISSION_FUSION_MIN_VALUE_NANOERG && dNeutron <= 0 && dProton <= 0;
+  const isFusion = dValue <= -FISSION_FUSION_MIN_VALUE_NANOERG && dNeutron >= 0 && dProton >= 0;
+  const isFlat = Math.abs(dValue) <= BETA_DECAY_FLAT_TOLERANCE_NANOERG;
+  const isTransmuteNP = isFlat && dNeutron > 0 && dProton <= 0;
+  const isTransmutePN = isFlat && dNeutron <= 0 && dProton > 0;
+
+  // Reject the zero/negative oracle price sentinel before attempting any
+  // price-dependent dilution or transmutation fee math. When price history has
+  // no usable sample, findNearestOraclePrice returns 0; passing that into the SDK
+  // would silently fabricate bogus zero/NaN prices.
+  if (goldPriceAtPrevHeight <= 0) {
+    warnDebug(
+      `[FeeBreakdown] Oracle price unavailable (price <= 0: ${goldPriceAtPrevHeight}) at height ${prevRaw.creationHeight} — skipping price-dependent fee calculations for box ${currRaw.boxId}`
+    );
+    const category: FeeCategory = isFission
+      ? "fission"
+      : isFusion
+      ? "fusion"
+      : isTransmuteNP
+      ? "transmuteNeutronToProton"
+      : isTransmutePN
+      ? "transmuteProtonToNeutron"
+      : "unknown";
+
+    return {
+      ...base,
+      category,
+      devFeeErg,
+      dilutionValueErg: 0,
+      oracleFeeErg: 0,
+      totalFeeErg: devFeeErg,
+      isEstimate: false,
+      priceUnavailable: true,
+    };
+  }
+
+  const pegOracle = makePegOracleLike(goldPriceAtPrevHeight);
+
+  if (isFission) {
     // FISSION — box.value increases by exactly the ERG fissioned. Neither
     // token amount held in the box can increase during fission (both flow
     // OUT to the user). Δvalue is the primary signal here — this box can
@@ -429,10 +468,11 @@ async function computeTransitionFee(
       oracleFeeErg: 0,
       totalFeeErg: devFeeErg + dilutionNanoErg / 1e9,
       isEstimate: false,
+      priceUnavailable: false,
     };
   }
 
-  if (dValue <= -FISSION_FUSION_MIN_VALUE_NANOERG && dNeutron >= 0 && dProton >= 0) {
+  if (isFusion) {
     // FUSION — box.value decreases by exactly the ERG redeemed. Same
     // reasoning as fission, mirrored: neither side can decrease during
     // fusion, and both sides can legitimately round to exactly 0 on a very
@@ -462,11 +502,11 @@ async function computeTransitionFee(
       oracleFeeErg: 0,
       totalFeeErg: devFeeErg + dilutionNanoErg / 1e9,
       isEstimate: false,
+      priceUnavailable: false,
     };
   }
 
-  const isFlat = Math.abs(dValue) <= BETA_DECAY_FLAT_TOLERANCE_NANOERG;
-  if (isFlat && dNeutron > 0 && dProton <= 0) {
+  if (isTransmuteNP) {
     // TRANSMUTATION: neutron -> proton (user sends neutrons in, gets protons out).
     // dProton is allowed to be exactly 0 on a dust-sized decay where the
     // output proton amount rounds down to nothing.
@@ -487,10 +527,11 @@ async function computeTransitionFee(
       oracleFeeErg: feeAmounts.oracleFee / 1e9,
       totalFeeErg: devFeeErg + dilutionNanoErg / 1e9,
       isEstimate: true,
+      priceUnavailable: false,
     };
   }
 
-  if (isFlat && dNeutron <= 0 && dProton > 0) {
+  if (isTransmutePN) {
     // TRANSMUTATION: proton -> neutron (user sends protons in, gets neutrons out).
     // dNeutron is allowed to be exactly 0 for the same dust-rounding reason.
     const protonPrice = await prevGluonBox.protonPrice(pegOracle);
@@ -510,6 +551,7 @@ async function computeTransitionFee(
       oracleFeeErg: feeAmounts.oracleFee / 1e9,
       totalFeeErg: devFeeErg + dilutionNanoErg / 1e9,
       isEstimate: true,
+      priceUnavailable: false,
     };
   }
 
@@ -534,6 +576,7 @@ async function computeTransitionFee(
     oracleFeeErg: 0,
     totalFeeErg: devFeeErg,
     isEstimate: false,
+    priceUnavailable: false,
   };
 }
 
@@ -659,6 +702,7 @@ export function useGluonFeeBreakdown(): UseGluonFeeBreakdownResult {
         let skippedMigration = 0;
         let skippedMissingRegisters = 0;
         let unclassified = 0;
+        let priceUnavailableCount = 0;
 
         let chainLinkMismatches = 0;
         for (let i = 1; i < validBoxes.length; i++) {
@@ -695,6 +739,7 @@ export function useGluonFeeBreakdown(): UseGluonFeeBreakdownResult {
           const fee = await computeTransitionFee(sdkMod, gluon, prevRaw, currRaw, goldPriceAtPrev, timestamp);
           if (fee) {
             if (fee.category === "unknown") unclassified++;
+            if (fee.priceUnavailable) priceUnavailableCount++;
             newTransitions.push(fee);
           }
         }
@@ -748,6 +793,7 @@ export function useGluonFeeBreakdown(): UseGluonFeeBreakdownResult {
           `Skipped (contract migration boundary): ${skippedMigration}`,
           `Skipped (missing registers): ${skippedMissingRegisters}`,
           `Unclassified transitions (devFee only, no dilution): ${unclassified}`,
+          `Transitions with unavailable oracle price (devFee only, price <= 0): ${priceUnavailableCount}`,
           "Transmutation dilution value is a rate-based estimate (varPhiBeta × transmuted volume), not an exact token-shortfall like Fission/Fusion.",
         ];
 
