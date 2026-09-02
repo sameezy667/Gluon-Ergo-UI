@@ -10,6 +10,7 @@ import { format as dateFnsFormat } from "date-fns";
 import { Loader2, TrendingUp } from "lucide-react";
 import { useGluonTransactionHistory } from "@/lib/hooks/useGluonTransactionHistory";
 import { useTheme } from "next-themes";
+import { useRouter } from "next/router";
 
 /**
  * APR / APY Calculation (fee-based, rolling window from protocol genesis)
@@ -118,7 +119,8 @@ export function GaucYieldChart() {
       const segmentSnapshots = filtered.slice(segmentStart, i + 1);
       const firstSnapshot = filtered[segmentStart];
 
-      const totalFees = segmentSnapshots.reduce((sum, s) => sum + s.feePaidErg, 0);
+      // Exclude firstSnapshot's feePaidErg (which was the boundary deposit/migration delta)
+      const totalFees = segmentSnapshots.slice(1).reduce((sum, s) => sum + s.feePaidErg, 0);
       const avgErg = segmentSnapshots.reduce((sum, s) => sum + s.ergValue, 0) / segmentSnapshots.length;
       const periodDays = (current.timestamp - firstSnapshot.timestamp) / (1000 * 60 * 60 * 24);
 
@@ -146,13 +148,43 @@ export function GaucYieldChart() {
     return dataPoints;
   }, [snapshots, range, isSparse, migrationHeights]);
 
-  // ── Live APY badge (most recent non-zero value) ────────────────────────────
-  const liveApy = useMemo(() => {
-    for (let i = chartData.length - 1; i >= 0; i--) {
-      if (chartData[i].apy > 0.0001) return chartData[i].apy;
+  const router = useRouter();
+
+  // ── APY threshold & URL override ──────────────────────────────────────────
+  const minApyThresholdPercent = useMemo(() => {
+    const raw = process.env.NEXT_PUBLIC_YIELD_CHART_MIN_APY;
+    const parsed = Number(raw ?? 1);
+    return Number.isFinite(parsed) ? parsed : 1;
+  }, []);
+
+  const showYieldChartOverride = useMemo(() => {
+    if (router.isReady && (router.query.showYieldChart === "true" || router.query.showYieldChart === "1")) {
+      return true;
     }
-    return null;
-  }, [chartData]);
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const val = params.get("showYieldChart");
+      if (val === "true" || val === "1") return true;
+    }
+    return false;
+  }, [router.isReady, router.query]);
+
+  // ── Live APY badge (current 30-day rolling annualized yield) ───────────────
+  const liveApy = useMemo(() => {
+    if (snapshots.length < 2) return null;
+    const cutoff30d = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const recent = snapshots.filter(s => s.timestamp >= cutoff30d);
+    if (recent.length < 2) return 0;
+    const first = recent[0];
+    const last = recent[recent.length - 1];
+    const totalFees = recent.slice(1).reduce((sum, s) => sum + s.feePaidErg, 0);
+    const avgErg = recent.reduce((sum, s) => sum + s.ergValue, 0) / recent.length;
+    const periodDays = Math.max(1, (last.timestamp - first.timestamp) / (1000 * 60 * 60 * 24));
+    if (avgErg <= 0 || totalFees <= 0) return 0;
+    const apr = (totalFees / avgErg) * (365 / periodDays);
+    const apy = Math.pow(1 + apr / 365, 365) - 1;
+    return Number.isFinite(apy) ? apy : 0;
+  }, [snapshots]);
 
   // ── Y-axis domain (Fix 2: percentile-based) ────────────────────────────────
   //
@@ -217,6 +249,17 @@ export function GaucYieldChart() {
       return closest.timestamp;
     });
   }, [migrationHeights, snapshots]);
+
+  // ── Conditional Render ─────────────────────────────────────────────────────
+  // Hide chart by default if URL override is not present:
+  // 1. Return null during loading to prevent layout flash/flicker
+  // 2. Return null if live APY is below the configured threshold (default 1%) or unavailable
+  if (!showYieldChartOverride) {
+    if (loading) return null;
+    if (liveApy === null || (liveApy * 100) < minApyThresholdPercent) {
+      return null;
+    }
+  }
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (

@@ -121,12 +121,6 @@ export function ReserveRatioChart({
     return finalData;
   }, [snapshots, range, isSparse, goldPriceNanoErg, totalNeutronSupply]);
 
-  // Dynamic Y-axis max scaling. Ceiling of 1000%, floor of 400% to ensure reference lines are visible.
-  const yAxisMax = useMemo(() => {
-    if (chartData.length === 0) return 500;
-    const maxVal = Math.max(...chartData.map(d => Math.max(d.reserveRatio, d.normalizedReserveRatio)));
-    return Math.min(1000, Math.max(400, maxVal * 1.1));
-  }, [chartData]);
 
   // Fix 1: One tick per calendar month — placed at the first data point of
   // each month. Prevents Recharts from auto-placing multiple ticks in the same
@@ -208,7 +202,7 @@ export function ReserveRatioChart({
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={chartData} margin={{ top: 4, right: 4, left: -16, bottom: 0 }}>
+            <AreaChart data={chartData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
               <defs>
                 <linearGradient id="colorReserve" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#e11d48" stopOpacity={0.3}/>
@@ -231,7 +225,9 @@ export function ReserveRatioChart({
                 axisLine={false} tickLine={false}
               />
               <YAxis
-                domain={[0, yAxisMax]}
+                width={42}
+                domain={[0, 200]}
+                ticks={[0, 50, 100, 150, 200]}
                 tickFormatter={(v) => `${v}%`}
                 tick={{ fill: isDark ? "rgba(255,255,255,0.3)" : "#6b7280", fontSize: 11 }}
                 axisLine={false} tickLine={false}
@@ -240,15 +236,12 @@ export function ReserveRatioChart({
               <Legend wrapperStyle={{ fontSize: 11 }} />
 
               {/*
-                Protocol health reference lines — these are documented Gluon Gold
-                protocol parameters, NOT placeholders or mock data:
-                  350% → Healthy reserve (above target backing threshold)
-                  180% → Caution zone (depeg risk increases)
-                   90% → Risk zone (GAU backing compromised)
+                Protocol health reference lines — documented Gluon Gold protocol parameters:
+                  170% → Caution zone (depeg risk increases)
+                  160% → Risk zone (GAU backing compromised)
               */}
-              <ReferenceLine y={350} stroke="#10b981" strokeDasharray="4 4" label={{ value: "Healthy", fill: "#10b981", fontSize: 10, position: "insideTopRight" }} />
-              <ReferenceLine y={180} stroke="#f59e0b" strokeDasharray="4 4" label={{ value: "Caution", fill: "#f59e0b", fontSize: 10, position: "insideTopRight" }} />
-              <ReferenceLine y={90} stroke="#ef4444" strokeDasharray="4 4" label={{ value: "Risk", fill: "#ef4444", fontSize: 10, position: "insideTopRight" }} />
+              <ReferenceLine y={170} stroke="#f59e0b" strokeDasharray="4 4" label={{ value: "Caution", fill: "#f59e0b", fontSize: 10, position: "insideTopRight" }} />
+              <ReferenceLine y={160} stroke="#ef4444" strokeDasharray="4 4" label={{ value: "Risk", fill: "#ef4444", fontSize: 10, position: "insideTopRight" }} />
 
               {/* Subtle vertical divider at contract address change — no label, no color */}
               {migrationTimestamps.map((ts, idx) => (
