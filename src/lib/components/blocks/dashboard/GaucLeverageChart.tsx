@@ -9,6 +9,7 @@ import type { TooltipProps } from "recharts";
 import { format as dateFnsFormat } from "date-fns";
 import { Loader2 } from "lucide-react";
 import { useGluonTransactionHistory } from "@/lib/hooks/useGluonTransactionHistory";
+import type { GluonBoxSnapshot } from "@/lib/hooks/useGluonTransactionHistory";
 import { useTheme } from "next-themes";
 
 type TimeRange = "ALL" | "90D" | "30D";
@@ -57,17 +58,48 @@ export function GaucLeverageChart({
     [snapshots]
   );
 
-  const chartData = useMemo(() => {
-    if (!totalNeutronSupply) return [];
-
-    let filtered = snapshots;
-    if (!isSparse && range !== "ALL") {
-      const days = range === "90D" ? 90 : 30;
-      const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-      filtered = snapshots.filter(s => s.timestamp >= cutoff);
+  const { chartData, timeDomain, xTicks, tickFormatter } = useMemo(() => {
+    if (!totalNeutronSupply || snapshots.length === 0) {
+      return {
+        chartData: [],
+        timeDomain: ["dataMin", "dataMax"] as [any, any],
+        xTicks: [] as number[],
+        tickFormatter: (v: number): string => "",
+      };
     }
 
-    const finalData = filtered.map(s => {
+    const now = Date.now();
+    let filteredSnapshots: GluonBoxSnapshot[] = [];
+
+    if (range === "ALL" || isSparse) {
+      filteredSnapshots = snapshots;
+    } else {
+      const days = range === "90D" ? 90 : 30;
+      const cutoff = now - days * 24 * 60 * 60 * 1000;
+
+      const inRange = snapshots.filter(s => s.timestamp >= cutoff);
+      const beforeRange = snapshots.filter(s => s.timestamp < cutoff);
+      const lastBefore = beforeRange.length > 0 ? beforeRange[beforeRange.length - 1] : null;
+
+      if (lastBefore) {
+        filteredSnapshots.push({
+          ...lastBefore,
+          timestamp: cutoff,
+        });
+      }
+
+      filteredSnapshots.push(...inRange);
+
+      const latest = filteredSnapshots[filteredSnapshots.length - 1];
+      if (latest && latest.timestamp < now - 60_000) {
+        filteredSnapshots.push({
+          ...latest,
+          timestamp: now,
+        });
+      }
+    }
+
+    const finalData = filteredSnapshots.map(s => {
       const circNeutronsRaw = totalNeutronSupply - s.neutronAmount;
       const effectiveGoldPrice = s.goldPriceNanoErg > 0 ? s.goldPriceNanoErg : goldPriceNanoErg;
       if (circNeutronsRaw <= 0 || effectiveGoldPrice <= 0) return null;
@@ -98,23 +130,36 @@ export function GaucLeverageChart({
       return { timestamp: s.timestamp, leverage };
     }).filter((p): p is { timestamp: number; leverage: number } => p !== null);
     
-    return finalData;
-  }, [snapshots, range, isSparse, goldPriceNanoErg, totalNeutronSupply]);
+    let domain: [number | string, number | string] = ["dataMin", "dataMax"];
+    let ticks: number[] = [];
+    let formatter = (v: number) => dateFnsFormat(new Date(v), "MMM");
 
-  // Fix 1: One tick per calendar month — placed at the first data point of
-  // each month. Prevents repeated "Aug Aug Aug" labels from Recharts auto-ticking.
-  const monthTicks = useMemo(() => {
-    const seen = new Set<string>();
-    const ticks: number[] = [];
-    for (const d of chartData) {
-      const key = dateFnsFormat(new Date(d.timestamp), "yyyy-MM");
-      if (!seen.has(key)) {
-        seen.add(key);
-        ticks.push(d.timestamp);
+    if (range === "ALL" || isSparse) {
+      const seen = new Set<string>();
+      for (const d of finalData) {
+        const key = dateFnsFormat(new Date(d.timestamp), "yyyy-MM");
+        if (!seen.has(key)) {
+          seen.add(key);
+          ticks.push(d.timestamp);
+        }
       }
+    } else {
+      const days = range === "90D" ? 90 : 30;
+      const cutoff = now - days * 24 * 60 * 60 * 1000;
+      domain = [cutoff, now];
+      const count = range === "90D" ? 6 : 5;
+      const step = (now - cutoff) / (count - 1);
+      ticks = Array.from({ length: count }, (_, i) => Math.round(cutoff + i * step));
+      formatter = (v: number) => dateFnsFormat(new Date(v), "MMM d");
     }
-    return ticks;
-  }, [chartData]);
+
+    return {
+      chartData: finalData,
+      timeDomain: domain,
+      xTicks: ticks,
+      tickFormatter: formatter,
+    };
+  }, [snapshots, range, isSparse, goldPriceNanoErg, totalNeutronSupply]);
 
   // Subtle vertical divider at contract address change — neutral, no label
   const migrationTimestamps = useMemo(() => {
@@ -189,9 +234,9 @@ export function GaucLeverageChart({
                 dataKey="timestamp"
                 type="number"
                 scale="time"
-                domain={["dataMin", "dataMax"]}
-                ticks={monthTicks}
-                tickFormatter={(v: number) => dateFnsFormat(new Date(v), "MMM")}
+                domain={timeDomain}
+                ticks={xTicks.length > 0 ? xTicks : undefined}
+                tickFormatter={tickFormatter}
                 tick={{ fill: isDark ? "rgba(255,255,255,0.3)" : "#6b7280", fontSize: 11 }}
                 axisLine={false} tickLine={false}
               />

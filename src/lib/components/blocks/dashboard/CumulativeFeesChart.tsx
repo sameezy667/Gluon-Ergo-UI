@@ -16,15 +16,17 @@ import type { TooltipProps } from "recharts";
 import { format as dateFnsFormat } from "date-fns";
 import { Loader2 } from "lucide-react";
 import { useGluonFeeBreakdown } from "@/lib/hooks/useGluonFeeBreakdown";
+import type { CumulativeFeePoint } from "@/lib/hooks/useGluonFeeBreakdown";
 import { useTheme } from "next-themes";
+import { tokenConfig } from "@/config/tokenConfig";
 
 /**
  * @file CumulativeFeesChart.tsx
  * @description Displays cumulative protocol fees split into categories:
  *   - Fission dev fee + dilution value     (exact)       ── indigo solid area
  *   - Fusion dev fee + dilution value      (exact)       ── amber solid area
- *   - Transmutation (N→P) dilution + dev   (estimate †)  ── purple dashed line
- *   - Transmutation (P→N) dilution + dev   (estimate †)  ── pink dashed line
+ *   - Transmutation (GAU → GAUC) dilution + dev (estimate †) ── purple dashed line
+ *   - Transmutation (GAUC → GAU) dilution + dev (estimate †) ── pink dashed line
  *   - Oracle fee on transmutation txs      (exact*)      ── teal solid area
  *
  * Fission, fusion, and oracle are stacked solid areas. The two transmutation
@@ -87,10 +89,10 @@ const CustomTooltip = ({ active, payload, label }: TooltipProps<number, string>)
         Fusion: {fusion.toFixed(4)} ERG
       </p>
       <p className="text-purple-400">
-        Transmutation (N→P) †: {transmuteNP.toFixed(4)} ERG
+        Transmutation ({tokenConfig.stableAsset.symbol} → {tokenConfig.volatileAsset.symbol}) †: {transmuteNP.toFixed(4)} ERG
       </p>
       <p className="text-pink-400">
-        Transmutation (P→N) †: {transmutePN.toFixed(4)} ERG
+        Transmutation ({tokenConfig.volatileAsset.symbol} → {tokenConfig.stableAsset.symbol}) †: {transmutePN.toFixed(4)} ERG
       </p>
       <p className="text-teal-500 dark:text-teal-400">
         Oracle: {oracle.toFixed(4)} ERG
@@ -116,33 +118,78 @@ export function CumulativeFeesChart() {
   const isDark = resolvedTheme === "dark";
   const isSparse = points.length < SPARSE_THRESHOLD;
 
-  // ── Filter by time range ────────────────────────────────────────────────
-  const chartData = useMemo(() => {
-    if (points.length === 0) return [];
-
-    let filtered = points;
-    if (!isSparse && range !== "ALL") {
-      const days = range === "90D" ? 90 : 30;
-      const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-      filtered = points.filter((p) => p.timestamp >= cutoff);
+  // ── Filter by time range & compute time domain / ticks ────────────────
+  const { chartData, timeDomain, xTicks, tickFormatter } = useMemo(() => {
+    if (points.length === 0) {
+      return {
+        chartData: [],
+        timeDomain: ["dataMin", "dataMax"] as [any, any],
+        xTicks: [] as number[],
+        tickFormatter: (v: number): string => "",
+      };
     }
 
-    return filtered;
-  }, [points, range, isSparse]);
+    const now = Date.now();
+    let filtered: CumulativeFeePoint[] = [];
 
-  // ── X-axis: one tick per calendar month ────────────────────────────────
-  const monthTicks = useMemo(() => {
-    const seen = new Set<string>();
-    const ticks: number[] = [];
-    for (const d of chartData) {
-      const key = dateFnsFormat(new Date(d.timestamp), "yyyy-MM");
-      if (!seen.has(key)) {
-        seen.add(key);
-        ticks.push(d.timestamp);
+    if (range === "ALL" || isSparse) {
+      filtered = [...points];
+    } else {
+      const days = range === "90D" ? 90 : 30;
+      const cutoff = now - days * 24 * 60 * 60 * 1000;
+
+      const inRange = points.filter((p) => p.timestamp >= cutoff);
+      const beforeRange = points.filter((p) => p.timestamp < cutoff);
+      const lastBefore = beforeRange.length > 0 ? beforeRange[beforeRange.length - 1] : null;
+
+      if (lastBefore) {
+        filtered.push({
+          ...lastBefore,
+          timestamp: cutoff,
+        });
+      }
+
+      filtered.push(...inRange);
+
+      const latest = filtered[filtered.length - 1];
+      if (latest && latest.timestamp < now - 60_000) {
+        filtered.push({
+          ...latest,
+          timestamp: now,
+        });
       }
     }
-    return ticks;
-  }, [chartData]);
+
+    let domain: [number | string, number | string] = ["dataMin", "dataMax"];
+    let ticks: number[] = [];
+    let formatter = (v: number) => dateFnsFormat(new Date(v), "MMM");
+
+    if (range === "ALL" || isSparse) {
+      const seen = new Set<string>();
+      for (const d of filtered) {
+        const key = dateFnsFormat(new Date(d.timestamp), "yyyy-MM");
+        if (!seen.has(key)) {
+          seen.add(key);
+          ticks.push(d.timestamp);
+        }
+      }
+    } else {
+      const days = range === "90D" ? 90 : 30;
+      const cutoff = now - days * 24 * 60 * 60 * 1000;
+      domain = [cutoff, now];
+      const count = range === "90D" ? 6 : 5;
+      const step = (now - cutoff) / (count - 1);
+      ticks = Array.from({ length: count }, (_, i) => Math.round(cutoff + i * step));
+      formatter = (v: number) => dateFnsFormat(new Date(v), "MMM d");
+    }
+
+    return {
+      chartData: filtered,
+      timeDomain: domain,
+      xTicks: ticks,
+      tickFormatter: formatter,
+    };
+  }, [points, range, isSparse]);
 
   // ── Y-axis: scale to the max total in view ─────────────────────────────
   const yAxisMax = useMemo(() => {
@@ -196,13 +243,13 @@ export function CumulativeFeesChart() {
               {showTransmuteEstimate && (
                 <>
                   <StatPill
-                    label="Transmutation (N→P)"
+                    label={`Transmutation (${tokenConfig.stableAsset.symbol} → ${tokenConfig.volatileAsset.symbol})`}
                     value={lastPoint.transmuteNeutronToProton}
                     colorClass="text-purple-400 bg-purple-500/10 border-purple-500/20"
                     isEstimate
                   />
                   <StatPill
-                    label="Transmutation (P→N)"
+                    label={`Transmutation (${tokenConfig.volatileAsset.symbol} → ${tokenConfig.stableAsset.symbol})`}
                     value={lastPoint.transmuteProtonToNeutron}
                     colorClass="text-pink-400 bg-pink-500/10 border-pink-500/20"
                     isEstimate
@@ -313,9 +360,9 @@ export function CumulativeFeesChart() {
                 dataKey="timestamp"
                 type="number"
                 scale="time"
-                domain={["dataMin", "dataMax"]}
-                ticks={monthTicks}
-                tickFormatter={(v: number) => dateFnsFormat(new Date(v), "MMM")}
+                domain={timeDomain}
+                ticks={xTicks.length > 0 ? xTicks : undefined}
+                tickFormatter={tickFormatter}
                 tick={{ fill: isDark ? "rgba(255,255,255,0.3)" : "#6b7280", fontSize: 11 }}
                 axisLine={false}
                 tickLine={false}
@@ -336,8 +383,10 @@ export function CumulativeFeesChart() {
               <Legend
                 wrapperStyle={{ fontSize: 11 }}
                 formatter={(value: string) => {
-                  if (value === "transmuteNeutronToProton") return "Transmutation (N→P) † (est.)";
-                  if (value === "transmuteProtonToNeutron") return "Transmutation (P→N) † (est.)";
+                  if (value === "transmuteNeutronToProton")
+                    return `Transmutation (${tokenConfig.stableAsset.symbol} → ${tokenConfig.volatileAsset.symbol}) † (est.)`;
+                  if (value === "transmuteProtonToNeutron")
+                    return `Transmutation (${tokenConfig.volatileAsset.symbol} → ${tokenConfig.stableAsset.symbol}) † (est.)`;
                   return value.charAt(0).toUpperCase() + value.slice(1);
                 }}
               />

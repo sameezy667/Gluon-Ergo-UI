@@ -90,34 +90,31 @@ export function GaucYieldChart() {
   const isDark = resolvedTheme === "dark";
   const isSparse = snapshots.length < SPARSE_THRESHOLD;
 
-  // ── Core data ──────────────────────────────────────────────────────────────
-  const chartData = useMemo(() => {
-    if (snapshots.length < 2) return [];
-
-    let filtered = snapshots;
-    if (!isSparse && range !== "ALL") {
-      const days = range === "90D" ? 90 : 30;
-      const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-      filtered = snapshots.filter(s => s.timestamp >= cutoff);
+  // ── Core data & time domain ───────────────────────────────────────────────
+  const { chartData, timeDomain, xTicks, tickFormatter } = useMemo(() => {
+    if (snapshots.length < 2) {
+      return {
+        chartData: [],
+        timeDomain: ["dataMin", "dataMax"] as [any, any],
+        xTicks: [] as number[],
+        tickFormatter: (v: number): string => "",
+      };
     }
 
-    if (filtered.length < 2) return [];
-
-    // Restart fee accumulation at migration boundaries to avoid fabricating
-    // fees across a contract address change.
+    const now = Date.now();
     const migrationHeightSet = new Set(migrationHeights);
-    const dataPoints: { timestamp: number; apy: number; apr: number }[] = [];
+    const allDataPoints: { timestamp: number; apy: number; apr: number }[] = [];
     let segmentStart = 0;
 
-    for (let i = 1; i < filtered.length; i++) {
-      const current = filtered[i];
+    for (let i = 1; i < snapshots.length; i++) {
+      const current = snapshots[i];
 
       if (current.migrationBoundary && migrationHeightSet.has(current.height)) {
         segmentStart = i;
       }
 
-      const segmentSnapshots = filtered.slice(segmentStart, i + 1);
-      const firstSnapshot = filtered[segmentStart];
+      const segmentSnapshots = snapshots.slice(segmentStart, i + 1);
+      const firstSnapshot = snapshots[segmentStart];
 
       const totalFees = segmentSnapshots.reduce((sum, s) => sum + s.feePaidErg, 0);
       const avgErg = segmentSnapshots.reduce((sum, s) => sum + s.ergValue, 0) / segmentSnapshots.length;
@@ -141,10 +138,68 @@ export function GaucYieldChart() {
         if (apr < 0) apr = 0;
       }
 
-      dataPoints.push({ timestamp: current.timestamp, apy, apr });
+      allDataPoints.push({ timestamp: current.timestamp, apy, apr });
     }
 
-    return dataPoints;
+    let filtered: { timestamp: number; apy: number; apr: number }[] = [];
+
+    if (range === "ALL" || isSparse) {
+      filtered = allDataPoints;
+    } else {
+      const days = range === "90D" ? 90 : 30;
+      const cutoff = now - days * 24 * 60 * 60 * 1000;
+
+      const inRange = allDataPoints.filter(p => p.timestamp >= cutoff);
+      const beforeRange = allDataPoints.filter(p => p.timestamp < cutoff);
+      const lastBefore = beforeRange.length > 0 ? beforeRange[beforeRange.length - 1] : null;
+
+      if (lastBefore) {
+        filtered.push({
+          ...lastBefore,
+          timestamp: cutoff,
+        });
+      }
+
+      filtered.push(...inRange);
+
+      const latest = filtered[filtered.length - 1];
+      if (latest && latest.timestamp < now - 60_000) {
+        filtered.push({
+          ...latest,
+          timestamp: now,
+        });
+      }
+    }
+
+    let domain: [number | string, number | string] = ["dataMin", "dataMax"];
+    let ticks: number[] = [];
+    let formatter = (v: number) => dateFnsFormat(new Date(v), "MMM");
+
+    if (range === "ALL" || isSparse) {
+      const seen = new Set<string>();
+      for (const d of filtered) {
+        const key = dateFnsFormat(new Date(d.timestamp), "yyyy-MM");
+        if (!seen.has(key)) {
+          seen.add(key);
+          ticks.push(d.timestamp);
+        }
+      }
+    } else {
+      const days = range === "90D" ? 90 : 30;
+      const cutoff = now - days * 24 * 60 * 60 * 1000;
+      domain = [cutoff, now];
+      const count = range === "90D" ? 6 : 5;
+      const step = (now - cutoff) / (count - 1);
+      ticks = Array.from({ length: count }, (_, i) => Math.round(cutoff + i * step));
+      formatter = (v: number) => dateFnsFormat(new Date(v), "MMM d");
+    }
+
+    return {
+      chartData: filtered,
+      timeDomain: domain,
+      xTicks: ticks,
+      tickFormatter: formatter,
+    };
   }, [snapshots, range, isSparse, migrationHeights]);
 
   const router = useRouter();
@@ -183,7 +238,7 @@ export function GaucYieldChart() {
   // the 95th-percentile APY across all non-zero data points and scale to that.
   //
   // Example with real data:
-  //   p95 ≈ 1.50 (150%)  →  yAxisMax = max(2.0, min(5.0, 1.50 × 1.2)) = 2.0
+  //   p95 ≈ 1.50 (150%)  →  yAxisMax = max(2.0, min(5.0, p95 × 1.2)) = 2.0
   //   → 131% sits at 65% of chart height  (prominent)
   //   → spikes above 200% are clipped at the top edge; tooltip still shows real value
   //
@@ -208,25 +263,6 @@ export function GaucYieldChart() {
     }
 
     return { yAxisMax: max, yAxisTicks: ticks };
-  }, [chartData]);
-
-  // ── X-axis: one tick per month (Fix 1) ────────────────────────────────────
-  //
-  // Without explicit ticks, Recharts places ticks at auto-chosen intervals
-  // and the "MMM" formatter collapses multiple ticks from the same month into
-  // repeated labels (e.g. "Aug Aug Aug"). We build an explicit ticks array
-  // containing only the first data point's timestamp for each calendar month.
-  const monthTicks = useMemo(() => {
-    const seen = new Set<string>();
-    const ticks: number[] = [];
-    for (const d of chartData) {
-      const key = dateFnsFormat(new Date(d.timestamp), "yyyy-MM");
-      if (!seen.has(key)) {
-        seen.add(key);
-        ticks.push(d.timestamp);
-      }
-    }
-    return ticks;
   }, [chartData]);
 
   // ── Migration dividers ─────────────────────────────────────────────────────
@@ -329,19 +365,13 @@ export function GaucYieldChart() {
             <LineChart data={chartData} margin={{ top: 4, right: 4, left: -16, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.06)"} vertical={false} />
 
-              {/*
-                Fix 1: Explicit month ticks — one per calendar month, placed at
-                the first data point of that month. Prevents repeated "Aug Aug Aug"
-                labels that occurred when Recharts auto-picked tick positions and
-                "MMM" collapsed them all to the same string.
-              */}
               <XAxis
                 dataKey="timestamp"
                 type="number"
                 scale="time"
-                domain={["dataMin", "dataMax"]}
-                ticks={monthTicks}
-                tickFormatter={(v: number) => dateFnsFormat(new Date(v), "MMM")}
+                domain={timeDomain}
+                ticks={xTicks.length > 0 ? xTicks : undefined}
+                tickFormatter={tickFormatter}
                 tick={{ fill: isDark ? "rgba(255,255,255,0.3)" : "#6b7280", fontSize: 11 }}
                 axisLine={false} tickLine={false}
               />

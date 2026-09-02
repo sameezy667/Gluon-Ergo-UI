@@ -9,6 +9,7 @@ import type { TooltipProps } from "recharts";
 import { format as dateFnsFormat } from "date-fns";
 import { Loader2 } from "lucide-react";
 import { useGluonTransactionHistory } from "@/lib/hooks/useGluonTransactionHistory";
+import type { GluonBoxSnapshot } from "@/lib/hooks/useGluonTransactionHistory";
 import { useTheme } from "next-themes";
 
 type TimeRange = "ALL" | "90D" | "30D";
@@ -71,17 +72,48 @@ export function ReserveRatioChart({
     [snapshots]
   );
 
-  const chartData = useMemo(() => {
-    if (!totalNeutronSupply) return [];
-
-    let filtered = snapshots;
-    if (!isSparse && range !== "ALL") {
-      const days = range === "90D" ? 90 : 30;
-      const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-      filtered = snapshots.filter(s => s.timestamp >= cutoff);
+  const { chartData, timeDomain, xTicks, tickFormatter } = useMemo(() => {
+    if (!totalNeutronSupply || snapshots.length === 0) {
+      return {
+        chartData: [],
+        timeDomain: ["dataMin", "dataMax"] as [any, any],
+        xTicks: [] as number[],
+        tickFormatter: (v: number): string => "",
+      };
     }
 
-    const finalData = filtered.map(s => {
+    const now = Date.now();
+    let filteredSnapshots: GluonBoxSnapshot[] = [];
+
+    if (range === "ALL" || isSparse) {
+      filteredSnapshots = snapshots;
+    } else {
+      const days = range === "90D" ? 90 : 30;
+      const cutoff = now - days * 24 * 60 * 60 * 1000;
+
+      const inRange = snapshots.filter(s => s.timestamp >= cutoff);
+      const beforeRange = snapshots.filter(s => s.timestamp < cutoff);
+      const lastBefore = beforeRange.length > 0 ? beforeRange[beforeRange.length - 1] : null;
+
+      if (lastBefore) {
+        filteredSnapshots.push({
+          ...lastBefore,
+          timestamp: cutoff,
+        });
+      }
+
+      filteredSnapshots.push(...inRange);
+
+      const latest = filteredSnapshots[filteredSnapshots.length - 1];
+      if (latest && latest.timestamp < now - 60_000) {
+        filteredSnapshots.push({
+          ...latest,
+          timestamp: now,
+        });
+      }
+    }
+
+    const finalData = filteredSnapshots.map(s => {
       const circNeutronsRaw = totalNeutronSupply - s.neutronAmount;
       let reserveRatio = 0;
       let normalizedReserveRatio = 0;
@@ -123,25 +155,36 @@ export function ReserveRatioChart({
       };
     }).filter(d => d.rawReserveRatio > 0 && d.rawReserveRatio <= 1000);
 
-    return finalData;
-  }, [snapshots, range, isSparse, goldPriceNanoErg, totalNeutronSupply]);
+    let domain: [number | string, number | string] = ["dataMin", "dataMax"];
+    let ticks: number[] = [];
+    let formatter = (v: number) => dateFnsFormat(new Date(v), "MMM");
 
-
-  // Fix 1: One tick per calendar month — placed at the first data point of
-  // each month. Prevents Recharts from auto-placing multiple ticks in the same
-  // month that all collapse to the same "MMM" label (e.g. "Aug Aug Aug").
-  const monthTicks = useMemo(() => {
-    const seen = new Set<string>();
-    const ticks: number[] = [];
-    for (const d of chartData) {
-      const key = dateFnsFormat(new Date(d.timestamp), "yyyy-MM");
-      if (!seen.has(key)) {
-        seen.add(key);
-        ticks.push(d.timestamp);
+    if (range === "ALL" || isSparse) {
+      const seen = new Set<string>();
+      for (const d of finalData) {
+        const key = dateFnsFormat(new Date(d.timestamp), "yyyy-MM");
+        if (!seen.has(key)) {
+          seen.add(key);
+          ticks.push(d.timestamp);
+        }
       }
+    } else {
+      const days = range === "90D" ? 90 : 30;
+      const cutoff = now - days * 24 * 60 * 60 * 1000;
+      domain = [cutoff, now];
+      const count = range === "90D" ? 6 : 5;
+      const step = (now - cutoff) / (count - 1);
+      ticks = Array.from({ length: count }, (_, i) => Math.round(cutoff + i * step));
+      formatter = (v: number) => dateFnsFormat(new Date(v), "MMM d");
     }
-    return ticks;
-  }, [chartData]);
+
+    return {
+      chartData: finalData,
+      timeDomain: domain,
+      xTicks: ticks,
+      tickFormatter: formatter,
+    };
+  }, [snapshots, range, isSparse, goldPriceNanoErg, totalNeutronSupply]);
 
   // Find migration timestamps for a subtle vertical divider (no label, neutral color)
   const migrationTimestamps = useMemo(() => {
@@ -223,9 +266,9 @@ export function ReserveRatioChart({
                 dataKey="timestamp"
                 type="number"
                 scale="time"
-                domain={["dataMin", "dataMax"]}
-                ticks={monthTicks}
-                tickFormatter={(v: number) => dateFnsFormat(new Date(v), "MMM")}
+                domain={timeDomain}
+                ticks={xTicks.length > 0 ? xTicks : undefined}
+                tickFormatter={tickFormatter}
                 tick={{ fill: isDark ? "rgba(255,255,255,0.3)" : "#6b7280", fontSize: 11 }}
                 axisLine={false} tickLine={false}
               />
@@ -247,7 +290,7 @@ export function ReserveRatioChart({
                   160% → Risk zone (GAU backing compromised)
               */}
               <ReferenceLine y={170} stroke="#f59e0b" strokeDasharray="4 4" label={{ value: "Caution", fill: "#f59e0b", fontSize: 10, position: "insideTopRight", dy: -4 }} />
-              <ReferenceLine y={160} stroke="#ef4444" strokeDasharray="4 4" label={{ value: "Risk", fill: "#ef4444", fontSize: 10, position: "insideBottomRight", dy: 6 }} />
+              <ReferenceLine y={160} stroke="#ef4444" strokeDasharray="4 4" label={{ value: "Risk", fill: "#ef4444", fontSize: 10, position: "insideBottomRight", dy: 8 }} />
 
               {/* Subtle vertical divider at contract address change — no label, no color */}
               {migrationTimestamps.map((ts, idx) => (
