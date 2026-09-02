@@ -7,7 +7,7 @@ import {
 } from "recharts";
 import type { TooltipProps } from "recharts";
 import { format as dateFnsFormat } from "date-fns";
-import { Loader2, TrendingUp } from "lucide-react";
+import { AlertTriangle, Info, Loader2, TrendingUp } from "lucide-react";
 import { useGluonTransactionHistory } from "@/lib/hooks/useGluonTransactionHistory";
 import { useTheme } from "next-themes";
 import { useRouter } from "next/router";
@@ -254,7 +254,7 @@ export function GaucYieldChart() {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="mt-6 rounded-xl border border-gray-200 dark:border-white/[0.07] bg-white dark:bg-[#141414] p-5">
-      <div className="mb-4 flex items-center justify-between flex-wrap gap-3">
+      <div className="mb-3 flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-baseline gap-2 flex-wrap">
           <h3 className="text-sm font-semibold text-gray-900 dark:text-white">GAUC Yield</h3>
           <span className="text-xs font-normal text-gray-400 dark:text-white/40">estimated from fee accumulation</span>
@@ -266,14 +266,18 @@ export function GaucYieldChart() {
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
-          {/* Live APY badge — always visible, no hover needed */}
+          {/* Live APY badge — with warning tooltip */}
           {liveApy !== null && !loading && (
-            <div className="flex items-center gap-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-3 py-1">
+            <div
+              className="flex items-center gap-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-3 py-1 cursor-help"
+              title="Estimated from gross reserve inflows, not exact protocol fees"
+            >
               <TrendingUp className="h-3.5 w-3.5 text-emerald-500" />
-              <span className="text-xs font-medium text-gray-500 dark:text-white/50">Live APY</span>
+              <span className="text-xs font-medium text-gray-500 dark:text-white/50">Live APY*</span>
               <span className="text-sm font-bold text-emerald-500">
                 {(liveApy * 100).toFixed(1)}%
               </span>
+              <Info className="h-3 w-3 text-emerald-500/70" />
             </div>
           )}
 
@@ -294,6 +298,14 @@ export function GaucYieldChart() {
             ))}
           </div>
         </div>
+      </div>
+
+      {/* Caveat banner explaining inflow proxy vs true fees */}
+      <div className="mb-4 flex items-start gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+        <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-amber-500" />
+        <span>
+          <strong>Note:</strong> Estimated from gross reserve inflows (deposits, fissions, migrations) — not filtered to actual protocol fees. True fee-based yield is typically much lower; see <em>Protocol Fee Accumulation</em> below for exact figures.
+        </span>
       </div>
 
       <div className="h-56 w-full">

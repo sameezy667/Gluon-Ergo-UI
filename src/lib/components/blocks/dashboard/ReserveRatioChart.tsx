@@ -29,8 +29,10 @@ interface ReserveRatioChartProps {
 
 const CustomTooltip = ({ active, payload, label }: TooltipProps<number, string>) => {
   if (!active || !payload?.length) return null;
-  const rr = payload.find(p => p.dataKey === "reserveRatio")?.value;
-  const nrr = payload.find(p => p.dataKey === "normalizedReserveRatio")?.value;
+  const data = payload[0]?.payload;
+  const rr = data?.rawReserveRatio ?? payload.find(p => p.dataKey === "reserveRatio")?.value;
+  const nrr = data?.rawNormalizedReserveRatio ?? payload.find(p => p.dataKey === "normalizedReserveRatio")?.value;
+  const isClipped = data?.isClipped;
   const dateStr = dateFnsFormat(new Date(label as number), "MMM d, yyyy HH:mm");
 
   return (
@@ -38,7 +40,7 @@ const CustomTooltip = ({ active, payload, label }: TooltipProps<number, string>)
       <p className="mb-1 text-gray-500 dark:text-white/40">{dateStr}</p>
       {typeof rr === "number" && (
         <p className="text-sm font-semibold text-rose-500">
-          Reserve: {rr.toFixed(1)}%
+          Reserve: {rr.toFixed(1)}%{isClipped ? " (>200% on chart)" : ""}
         </p>
       )}
       {typeof nrr === "number" && (
@@ -113,10 +115,13 @@ export function ReserveRatioChart({
 
       return {
         timestamp: s.timestamp,
-        reserveRatio: +reserveRatio.toFixed(1),
-        normalizedReserveRatio: +normalizedReserveRatio.toFixed(1),
+        reserveRatio: Math.min(200, +reserveRatio.toFixed(1)),
+        normalizedReserveRatio: Math.min(200, +normalizedReserveRatio.toFixed(1)),
+        rawReserveRatio: +reserveRatio.toFixed(1),
+        rawNormalizedReserveRatio: +normalizedReserveRatio.toFixed(1),
+        isClipped: reserveRatio > 200,
       };
-    }).filter(d => d.reserveRatio > 0 && d.reserveRatio <= 1000);
+    }).filter(d => d.rawReserveRatio > 0 && d.rawReserveRatio <= 1000);
 
     return finalData;
   }, [snapshots, range, isSparse, goldPriceNanoErg, totalNeutronSupply]);
@@ -241,8 +246,8 @@ export function ReserveRatioChart({
                   170% → Caution zone (depeg risk increases)
                   160% → Risk zone (GAU backing compromised)
               */}
-              <ReferenceLine y={170} stroke="#f59e0b" strokeDasharray="4 4" label={{ value: "Caution", fill: "#f59e0b", fontSize: 10, position: "insideTopRight" }} />
-              <ReferenceLine y={160} stroke="#ef4444" strokeDasharray="4 4" label={{ value: "Risk", fill: "#ef4444", fontSize: 10, position: "insideBottomRight" }} />
+              <ReferenceLine y={170} stroke="#f59e0b" strokeDasharray="4 4" label={{ value: "Caution", fill: "#f59e0b", fontSize: 10, position: "insideTopRight", dy: -4 }} />
+              <ReferenceLine y={160} stroke="#ef4444" strokeDasharray="4 4" label={{ value: "Risk", fill: "#ef4444", fontSize: 10, position: "insideBottomRight", dy: 6 }} />
 
               {/* Subtle vertical divider at contract address change — no label, no color */}
               {migrationTimestamps.map((ts, idx) => (
