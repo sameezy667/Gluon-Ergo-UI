@@ -119,8 +119,7 @@ export function GaucYieldChart() {
       const segmentSnapshots = filtered.slice(segmentStart, i + 1);
       const firstSnapshot = filtered[segmentStart];
 
-      // Exclude firstSnapshot's feePaidErg (which was the boundary deposit/migration delta)
-      const totalFees = segmentSnapshots.slice(1).reduce((sum, s) => sum + s.feePaidErg, 0);
+      const totalFees = segmentSnapshots.reduce((sum, s) => sum + s.feePaidErg, 0);
       const avgErg = segmentSnapshots.reduce((sum, s) => sum + s.ergValue, 0) / segmentSnapshots.length;
       const periodDays = (current.timestamp - firstSnapshot.timestamp) / (1000 * 60 * 60 * 24);
 
@@ -153,7 +152,7 @@ export function GaucYieldChart() {
   // ── APY threshold & URL override ──────────────────────────────────────────
   const minApyThresholdPercent = useMemo(() => {
     const raw = process.env.NEXT_PUBLIC_YIELD_CHART_MIN_APY;
-    const parsed = Number(raw ?? 1);
+    const parsed = raw && raw.trim() !== "" ? Number(raw) : 1;
     return Number.isFinite(parsed) ? parsed : 1;
   }, []);
 
@@ -169,22 +168,13 @@ export function GaucYieldChart() {
     return false;
   }, [router.isReady, router.query]);
 
-  // ── Live APY badge (current 30-day rolling annualized yield) ───────────────
+  // ── Live APY badge (most recent non-zero value from chartData) ─────────────
   const liveApy = useMemo(() => {
-    if (snapshots.length < 2) return null;
-    const cutoff30d = Date.now() - 30 * 24 * 60 * 60 * 1000;
-    const recent = snapshots.filter(s => s.timestamp >= cutoff30d);
-    if (recent.length < 2) return 0;
-    const first = recent[0];
-    const last = recent[recent.length - 1];
-    const totalFees = recent.slice(1).reduce((sum, s) => sum + s.feePaidErg, 0);
-    const avgErg = recent.reduce((sum, s) => sum + s.ergValue, 0) / recent.length;
-    const periodDays = Math.max(1, (last.timestamp - first.timestamp) / (1000 * 60 * 60 * 24));
-    if (avgErg <= 0 || totalFees <= 0) return 0;
-    const apr = (totalFees / avgErg) * (365 / periodDays);
-    const apy = Math.pow(1 + apr / 365, 365) - 1;
-    return Number.isFinite(apy) ? apy : 0;
-  }, [snapshots]);
+    for (let i = chartData.length - 1; i >= 0; i--) {
+      if (chartData[i].apy > 0.0001) return chartData[i].apy;
+    }
+    return null;
+  }, [chartData]);
 
   // ── Y-axis domain (Fix 2: percentile-based) ────────────────────────────────
   //
