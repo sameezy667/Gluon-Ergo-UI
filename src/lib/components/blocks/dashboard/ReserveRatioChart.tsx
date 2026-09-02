@@ -228,6 +228,7 @@ export function ReserveRatioChart({
                 width={42}
                 domain={[0, 200]}
                 ticks={[0, 50, 100, 150, 200]}
+                allowDataOverflow={true}
                 tickFormatter={(v) => `${v}%`}
                 tick={{ fill: isDark ? "rgba(255,255,255,0.3)" : "#6b7280", fontSize: 11 }}
                 axisLine={false} tickLine={false}
@@ -241,7 +242,7 @@ export function ReserveRatioChart({
                   160% → Risk zone (GAU backing compromised)
               */}
               <ReferenceLine y={170} stroke="#f59e0b" strokeDasharray="4 4" label={{ value: "Caution", fill: "#f59e0b", fontSize: 10, position: "insideTopRight" }} />
-              <ReferenceLine y={160} stroke="#ef4444" strokeDasharray="4 4" label={{ value: "Risk", fill: "#ef4444", fontSize: 10, position: "insideTopRight" }} />
+              <ReferenceLine y={160} stroke="#ef4444" strokeDasharray="4 4" label={{ value: "Risk", fill: "#ef4444", fontSize: 10, position: "insideBottomRight" }} />
 
               {/* Subtle vertical divider at contract address change — no label, no color */}
               {migrationTimestamps.map((ts, idx) => (
